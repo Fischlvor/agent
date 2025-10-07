@@ -10,7 +10,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, desc
 from sqlalchemy.orm import Session
 
-from app.ai.agent_service import AgentService
+#from app.ai.agent_service import AgentService
+from app.ai.adk_agent_adapter import AgentService  # ✅ 使用 ADK Agent 适配器
 from app.ai.factory import FACTORY
 from app.constants import EventType, ContentType, MessageStatus
 from app.models.ai_model import AIModel
@@ -588,17 +589,13 @@ class ChatService:
             async for chunk in agent.run_streaming(
                 messages=messages,
                 system_prompt=session.system_prompt,
-                tools=None  # TODO: 集成工具列表
+                tools=None,  # ✅ 工具通过 ADK 自动加载（adk_agent_adapter.py）
+                user_id=str(user.id),  # ✅ 传递真实的用户ID
+                session_id=str(session_id)  # ✅ 传递真实的会话ID
             ):
-                # 🐛 调试日志：打印原始 chunk
-                LOGGER.debug(f"📦 Received chunk: type={chunk.get('type')}, content={chunk.get('content', '')[:100]}")
-
                 if chunk["type"] == "content":
                     content_delta = chunk["content"]
                     assistant_content += content_delta
-
-                    # 🐛 调试日志：打印累积的内容
-                    LOGGER.debug(f"📝 Accumulated content length: {len(assistant_content)}, has <think>: {'<think>' in assistant_content}, has </think>: {'</think>' in assistant_content}")
 
                     # ✅ 检测和分离 thinking 内容（支持多轮思考，带开始/完成消息）
                     # 提取所有完整的 <think>...</think> 块
@@ -871,8 +868,9 @@ class ChatService:
 
             # 如果是第一条消息，异步生成标题
             if session.message_count == 2:  # 用户消息 + AI回复
-                # TODO: 实现异步标题生成
-                pass
+                # ✅ 异步生成会话标题（不阻塞响应）
+                import asyncio
+                asyncio.create_task(self.generate_title(session_id))
 
         except Exception as e:
             LOGGER.exception("生成回复失败")
@@ -904,6 +902,72 @@ class ChatService:
         Returns:
             生成的标题
         """
-        # TODO: 实现标题生成逻辑
-        return None
+        try:
+            # ✅ 获取会话的前2条消息
+            session = self.db.query(ChatSession).filter(
+                ChatSession.id == session_id
+            ).first()
+
+            if not session:
+                return None
+
+            messages = self.db.query(ChatMessage).filter(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_deleted == False
+            ).order_by(ChatMessage.sent_at.asc()).limit(2).all()
+
+            if len(messages) < 2:
+                return None
+
+            user_message = messages[0].content
+            assistant_message = messages[1].content
+
+            # ✅ 生成标题策略：提取用户问题的关键部分
+            title = self._extract_title_from_message(user_message)
+
+            # 更新会话标题
+            if title and not session.title:  # 只在标题为空时更新
+                session.title = title
+                self.db.commit()
+                LOGGER.info(f"会话 {session_id} 标题已生成: {title}")
+
+            return title
+
+        except Exception as e:
+            LOGGER.error(f"生成会话标题失败: {e}")
+            self.db.rollback()
+            return None
+
+    def _extract_title_from_message(self, message: str) -> str:
+        """从消息中提取标题
+
+        Args:
+            message: 用户消息
+
+        Returns:
+            提取的标题
+        """
+        # 移除多余空格和换行
+        message = message.strip().replace('\n', ' ')
+
+        # 如果消息很短，直接返回
+        if len(message) <= 15:
+            return message
+
+        # 如果是问句，提取问题核心
+        question_patterns = [
+            ('什么是', lambda m: m.split('什么是')[1][:15] if '什么是' in m else None),
+            ('如何', lambda m: '如何' + m.split('如何')[1][:12] if '如何' in m else None),
+            ('怎么', lambda m: '怎么' + m.split('怎么')[1][:12] if '怎么' in m else None),
+            ('为什么', lambda m: '为什么' + m.split('为什么')[1][:10] if '为什么' in m else None),
+        ]
+
+        for pattern, extractor in question_patterns:
+            if pattern in message:
+                title = extractor(message)
+                if title:
+                    return title.strip()
+
+        # 默认：截取前20个字
+        return message[:20].strip() + ('...' if len(message) > 20 else '')
 
