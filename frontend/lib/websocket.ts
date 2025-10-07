@@ -64,8 +64,17 @@ export class ChatWebSocketManager {
           this.stopHeartbeat();
           this.emit('close', event);
 
-          // 如果不是手动关闭，尝试重连
-          if (!this.isManualClose && this.reconnectAttempts < this.maxReconnectAttempts) {
+          // 如果是 403（token 过期/无效），需要刷新 token 后重连
+          if (event.code === 1008 || event.code === 403) {
+            console.log('[WebSocket] Token 可能已过期，将刷新 token 后重连');
+            // 等待一小段时间，让前端有机会刷新 token
+            setTimeout(() => {
+              if (!this.isManualClose) {
+                this.reconnectWithNewToken();
+              }
+            }, 1000);
+          } else if (!this.isManualClose && this.reconnectAttempts < this.maxReconnectAttempts) {
+            // 其他情况的普通重连
             this.reconnect();
           }
         };
@@ -121,6 +130,37 @@ export class ChatWebSocketManager {
         console.error('[WebSocket] Reconnect failed', error);
       });
     }, delay);
+  }
+
+  /**
+   * 使用新 token 重连
+   * 用于 token 过期后的重连
+   */
+  private reconnectWithNewToken(): void {
+    console.log('[WebSocket] Attempting to reconnect with fresh token');
+
+    // 重置重连次数
+    this.reconnectAttempts = 0;
+
+    // 从 localStorage 获取最新的 token
+    const newToken = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+
+    if (newToken && newToken !== this.token) {
+      console.log('[WebSocket] Found new token, updating connection');
+      this.token = newToken;
+      // 更新 WebSocket URL
+      const wsUrl = this.url.split('?')[0]; // 移除旧的 token
+      this.url = `${wsUrl}?token=${encodeURIComponent(newToken)}`;
+    }
+
+    // 尝试重连
+    this.connect().catch((error) => {
+      console.error('[WebSocket] Reconnect with new token failed', error);
+      // 如果还是失败，使用普通重连逻辑
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnect();
+      }
+    });
   }
 
   /**

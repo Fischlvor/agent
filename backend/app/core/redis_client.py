@@ -1,7 +1,9 @@
 """Redis客户端模块，提供Redis连接和操作。"""
 
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
+import json
+import hashlib
 
 import redis
 
@@ -237,6 +239,198 @@ class RedisService:
             return self.client.ping()
         except Exception:
             return False
+
+    # ==================== 工具调用结果缓存 ====================
+
+    def _generate_tool_cache_key(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        """生成工具调用缓存的键
+
+        Args:
+            tool_name: 工具名称
+            tool_args: 工具参数
+
+        Returns:
+            缓存键
+        """
+        # 对参数进行排序并序列化，保证相同参数生成相同的hash
+        args_str = json.dumps(tool_args, sort_keys=True, ensure_ascii=False)
+        args_hash = hashlib.md5(args_str.encode()).hexdigest()
+        return f"tool_cache:{tool_name}:{args_hash}"
+
+    def get_tool_result(self, tool_name: str, tool_args: Dict[str, Any]) -> Optional[str]:
+        """获取工具调用缓存结果
+
+        Args:
+            tool_name: 工具名称
+            tool_args: 工具参数
+
+        Returns:
+            缓存的结果，如果不存在返回None
+        """
+        key = self._generate_tool_cache_key(tool_name, tool_args)
+        return self.client.get(key)
+
+    def save_tool_result(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        result: str,
+        expire_seconds: int = 3600
+    ) -> bool:
+        """保存工具调用结果到缓存
+
+        Args:
+            tool_name: 工具名称
+            tool_args: 工具参数
+            result: 工具执行结果
+            expire_seconds: 过期时间（秒），默认1小时
+
+        Returns:
+            是否保存成功
+        """
+        key = self._generate_tool_cache_key(tool_name, tool_args)
+        return self.client.setex(key, expire_seconds, result)
+
+    # ==================== 用户偏好/配置缓存 ====================
+
+    def get_user_preference(self, user_id: str, key: str) -> Optional[str]:
+        """获取用户偏好设置
+
+        Args:
+            user_id: 用户ID
+            key: 配置键（如 'system_prompt', 'default_model' 等）
+
+        Returns:
+            配置值，如果不存在返回None
+        """
+        cache_key = f"user_pref:{user_id}:{key}"
+        return self.client.get(cache_key)
+
+    def save_user_preference(
+        self,
+        user_id: str,
+        key: str,
+        value: str,
+        expire_seconds: int = 86400
+    ) -> bool:
+        """保存用户偏好设置
+
+        Args:
+            user_id: 用户ID
+            key: 配置键
+            value: 配置值
+            expire_seconds: 过期时间（秒），默认24小时
+
+        Returns:
+            是否保存成功
+        """
+        cache_key = f"user_pref:{user_id}:{key}"
+        return self.client.setex(cache_key, expire_seconds, value)
+
+    def delete_user_preference(self, user_id: str, key: str) -> bool:
+        """删除用户偏好设置
+
+        Args:
+            user_id: 用户ID
+            key: 配置键
+
+        Returns:
+            是否删除成功
+        """
+        cache_key = f"user_pref:{user_id}:{key}"
+        return self.client.delete(cache_key) > 0
+
+    # ==================== 聊天历史摘要缓存 ====================
+
+    def get_session_summary(self, session_id: str) -> Optional[str]:
+        """获取会话历史摘要
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            摘要内容，如果不存在返回None
+        """
+        key = f"session_summary:{session_id}"
+        return self.client.get(key)
+
+    def save_session_summary(
+        self,
+        session_id: str,
+        summary: str,
+        expire_seconds: int = 7200
+    ) -> bool:
+        """保存会话历史摘要
+
+        Args:
+            session_id: 会话ID
+            summary: 摘要内容
+            expire_seconds: 过期时间（秒），默认2小时
+
+        Returns:
+            是否保存成功
+        """
+        key = f"session_summary:{session_id}"
+        return self.client.setex(key, expire_seconds, summary)
+
+    def delete_session_summary(self, session_id: str) -> bool:
+        """删除会话历史摘要（会话更新时）
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            是否删除成功
+        """
+        key = f"session_summary:{session_id}"
+        return self.client.delete(key) > 0
+
+    # ==================== API 调用频率限制 ====================
+
+    def check_rate_limit(
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int
+    ) -> tuple[bool, int]:
+        """检查是否超过频率限制（基于滑动窗口）
+
+        Args:
+            key: 限流键（通常是 user_id 或 IP）
+            max_requests: 时间窗口内最大请求数
+            window_seconds: 时间窗口（秒）
+
+        Returns:
+            (是否允许请求, 剩余请求数)
+        """
+        rate_key = f"rate_limit:{key}"
+        current = self.client.get(rate_key)
+
+        if current is None:
+            # 首次请求
+            self.client.setex(rate_key, window_seconds, "1")
+            return (True, max_requests - 1)
+
+        current_count = int(current)
+        if current_count >= max_requests:
+            # 超过限制
+            return (False, 0)
+
+        # 未超过限制，增加计数
+        self.client.incr(rate_key)
+        return (True, max_requests - current_count - 1)
+
+    def reset_rate_limit(self, key: str) -> bool:
+        """重置频率限制（管理员操作）
+
+        Args:
+            key: 限流键
+
+        Returns:
+            是否重置成功
+        """
+        rate_key = f"rate_limit:{key}"
+        return self.client.delete(rate_key) > 0
 
 
 # 创建全局Redis服务实例
