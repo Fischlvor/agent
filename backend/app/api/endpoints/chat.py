@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -13,6 +13,7 @@ from app.middleware.auth import get_current_active_user
 from app.models.user import User
 from app.schemas.chat import (
     AIModelResponse,
+    MessageCreate,
     MessageListResponse,
     MessageResponse,
     MessageUpdate,
@@ -22,6 +23,7 @@ from app.schemas.chat import (
     SessionUpdate,
 )
 from app.services.chat_service import ChatService
+from app.core.redis_client import redis_service
 
 LOGGER = logging.getLogger(__name__)
 
@@ -193,6 +195,118 @@ def delete_session(
 
 
 # ============ 消息管理 ============
+
+@router.post("/sessions/{session_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+async def send_message(
+    session_id: UUID,
+    request: MessageCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """发送消息到指定会话（HTTP POST），响应通过 WebSocket 流式返回
+
+    Args:
+        session_id: 会话ID
+        request: 消息创建请求
+        background_tasks: 后台任务
+        db: 数据库会话
+        current_user: 当前用户
+
+    Returns:
+        创建的用户消息对象（AI响应会通过WebSocket推送）
+    """
+    from app.api.endpoints.chat_ws import manager
+
+    chat_service = ChatService(db)
+    user_id = str(current_user.id)
+
+    # 创建用户消息
+    user_message = chat_service.create_user_message(
+        session_id=session_id,
+        user=current_user,
+        content=request.content,
+        model_id=request.model_id
+    )
+
+    # 后台任务：生成AI响应并通过WebSocket推送
+    background_tasks.add_task(
+        _generate_and_push_response,
+        user_id=user_id,
+        session_id=session_id,
+        user=current_user,
+        content=request.content,
+        model_id=request.model_id
+    )
+
+    return user_message
+
+
+async def _generate_and_push_response(
+    user_id: str,
+    session_id: UUID,
+    user: User,
+    content: str,
+    model_id: Optional[str] = None
+):
+    """后台任务：生成响应并推送到WebSocket
+
+    Args:
+        user_id: 用户ID
+        session_id: 会话ID
+        user: 用户对象
+        content: 消息内容
+        model_id: 模型ID
+    """
+    from app.api.endpoints.chat_ws import manager
+    from app.db.session import SESSION_LOCAL
+
+    # 创建新的数据库会话（后台任务需要独立的会话）
+    db = SESSION_LOCAL()
+    try:
+        chat_service = ChatService(db)
+
+        # 清除停止标志
+        manager.clear_stop_generation(user_id, str(session_id))
+
+        # 流式生成并推送
+        async for chunk in chat_service.send_message_streaming(
+            session_id=session_id,
+            user=user,
+            content=content,
+            model_id=model_id,
+            skip_user_message=True  # 用户消息已经创建了
+        ):
+            # 检查停止标志
+            if manager.check_stop_generation(user_id, str(session_id)):
+                await manager.send_message(user_id, {
+                    "type": "info",
+                    "message": "已停止生成"
+                })
+                break
+
+            # 检查连接是否仍然活跃
+            if user_id not in manager.active_connections:
+                break
+
+            # 通过WebSocket推送
+            await manager.send_message(user_id, chunk)
+
+    except Exception as e:
+        LOGGER.error("生成响应失败: %s", str(e), exc_info=True)
+        # 错误也推送到前端
+        try:
+            await manager.send_message(user_id, {
+                "type": "error",
+                "error": str(e)
+            })
+        except Exception:
+            LOGGER.error("推送错误消息失败", exc_info=True)
+    finally:
+        # 清除停止标志
+        manager.clear_stop_generation(user_id, str(session_id))
+        db.close()
+
 
 @router.get("/sessions/{session_id}/messages", response_model=MessageListResponse)
 def get_messages(
