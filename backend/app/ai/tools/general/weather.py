@@ -33,15 +33,19 @@ class WeatherTool(BaseTool):
     async def execute(
         self,
         location: str,
-        unit: TemperatureUnit = TemperatureUnit.CELSIUS,
+        unit: str = "celsius",
     ) -> Dict[str, Any]:
         """
         获取指定城市的天气信息
 
         :param location: 城市名称（英文），如 "Beijing" 或 "New York"
-        :param unit: 温度单位，可选值为 "celsius" 或 "fahrenheit"
+        :param unit: 温度单位，可选值为 "celsius" 或 "fahrenheit"，默认 "celsius"
         :return: 包含天气信息的字典
         """
+        # ✅ 验证和转换 unit 参数
+        if unit not in ["celsius", "fahrenheit"]:
+            unit = "celsius"
+
         LOGGER.info("获取天气信息: 城市=%s, 单位=%s", location, unit)
 
         try:

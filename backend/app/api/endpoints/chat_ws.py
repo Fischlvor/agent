@@ -25,6 +25,7 @@ class ConnectionManager:
         """初始化连接管理器"""
         self.active_connections: Dict[str, WebSocket] = {}
         self.heartbeat_tasks: Dict[str, asyncio.Task] = {}
+        self.stop_generation_flags: Dict[str, bool] = {}  # ✅ 停止生成标志
 
     async def connect(self, user_id: str, websocket: WebSocket):
         """建立WebSocket连接
@@ -91,6 +92,42 @@ class ConnectionManager:
         except Exception:
             LOGGER.exception("用户 %s 心跳任务异常", user_id)
             await self.disconnect(user_id)
+
+    def set_stop_generation(self, user_id: str, session_id: str):
+        """设置停止生成标志
+
+        Args:
+            user_id: 用户ID
+            session_id: 会话ID
+        """
+        key = f"{user_id}:{session_id}"
+        self.stop_generation_flags[key] = True
+        LOGGER.info(f"设置停止生成标志: {key}")
+
+    def check_stop_generation(self, user_id: str, session_id: str) -> bool:
+        """检查是否需要停止生成
+
+        Args:
+            user_id: 用户ID
+            session_id: 会话ID
+
+        Returns:
+            True表示需要停止
+        """
+        key = f"{user_id}:{session_id}"
+        return self.stop_generation_flags.get(key, False)
+
+    def clear_stop_generation(self, user_id: str, session_id: str):
+        """清除停止生成标志
+
+        Args:
+            user_id: 用户ID
+            session_id: 会话ID
+        """
+        key = f"{user_id}:{session_id}"
+        if key in self.stop_generation_flags:
+            del self.stop_generation_flags[key]
+            LOGGER.info(f"清除停止生成标志: {key}")
 
 
 # 全局连接管理器
@@ -162,6 +199,9 @@ async def websocket_chat_endpoint(
                     try:
                         chat_service = ChatService(db_session)
 
+                        # ✅ 生成开始前清除停止标志
+                        manager.clear_stop_generation(user_id, str(session_id))
+
                         # 流式生成回复（带超时和错误处理）
                         async for chunk in chat_service.send_message_streaming(
                             session_id=session_id,
@@ -171,6 +211,16 @@ async def websocket_chat_endpoint(
                             skip_user_message=skip_user_message,  # ✅ 传递参数
                             edited_message_id=UUID(edited_message_id) if edited_message_id else None  # ✅ 传递编辑的消息ID
                         ):
+                            # ✅ 检查停止标志
+                            if manager.check_stop_generation(user_id, str(session_id)):
+                                LOGGER.info("用户 %s 停止生成，会话 %s", user_id, session_id)
+                                await manager.send_message(user_id, {
+                                    "type": "info",
+                                    "message": "已停止生成"
+                                })
+                                manager.clear_stop_generation(user_id, str(session_id))
+                                break
+
                             # 检查连接是否仍然活跃
                             if user_id not in manager.active_connections:
                                 LOGGER.warning("用户 %s 连接已断开，停止发送消息", user_id)
@@ -193,11 +243,19 @@ async def websocket_chat_endpoint(
                         db_session.close()
 
                 elif msg_type == "stop_generation":
-                    # TODO: 实现停止生成逻辑
-                    await manager.send_message(user_id, {
-                        "type": "info",
-                        "message": "停止生成功能即将支持"
-                    })
+                    # ✅ 实现停止生成逻辑
+                    session_id = message.get("session_id")
+                    if session_id:
+                        manager.set_stop_generation(user_id, session_id)
+                        await manager.send_message(user_id, {
+                            "type": "info",
+                            "message": "正在停止生成..."
+                        })
+                    else:
+                        await manager.send_message(user_id, {
+                            "type": "error",
+                            "error": "缺少session_id参数"
+                        })
 
                 else:
                     # 未知消息类型
