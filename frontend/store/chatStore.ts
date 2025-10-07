@@ -255,16 +255,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: (content: string) => {
+  sendMessage: async (content: string) => {
     const { wsManager, currentSession, currentModel, messageTimeout } = get();
 
     if (!wsManager?.isConnected) {
       console.error('WebSocket not connected');
+      set({ error: 'WebSocket 未连接' });
       return;
     }
 
     if (!currentSession) {
       console.error('No active session');
+      set({ error: '没有活动会话' });
       return;
     }
 
@@ -273,53 +275,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
       clearTimeout(messageTimeout);
     }
 
-    // 发送 WebSocket 消息
-    wsManager.send({
-      type: 'send_message',
-      session_id: currentSession.id,
-      content,
-      model_id: currentModel || undefined
-    });
+    try {
+      // ✅ 通过 HTTP POST 发送消息
+      const userMessage = await apiClient.sendMessage(
+        currentSession.id,
+        content,
+        currentModel || undefined
+      );
 
-    // 添加用户消息到本地状态
-    const userMessage: ChatMessage = {
-      id: `temp-${Date.now()}`,
-      session_id: currentSession.id,
-      role: 'user',
-      content,
-      is_edited: false,
-      is_deleted: false,
-      is_pinned: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
+      // ✅ 添加用户消息到本地状态
+      set((state) => ({
+        messages: [...state.messages, userMessage],
+        status: 'generating'
+      }));
 
-    // ✅ 启动 60 秒超时定时器
-    const timeout = setTimeout(() => {
-      const currentState = get();
-      if (currentState.status === 'generating') {
-        console.error('Message generation timeout');
-        set({
-          status: 'connected',
-          error: '消息生成超时，请重试',
-          streamingMessage: null,
-          messageTimeout: null
-        });
+      // ✅ 启动 60 秒超时定时器
+      const timeout = setTimeout(() => {
+        const currentState = get();
+        if (currentState.status === 'generating') {
+          console.error('Message generation timeout');
+          set({
+            status: 'connected',
+            error: '消息生成超时，请重试',
+            streamingMessage: null,
+            messageTimeout: null
+          });
 
-        // 3秒后清除错误
-        setTimeout(() => {
-          if (get().error === '消息生成超时，请重试') {
-            set({ error: null });
-          }
-        }, 3000);
-      }
-    }, 60000);  // 60秒超时
+          // 3秒后清除错误
+          setTimeout(() => {
+            if (get().error === '消息生成超时，请重试') {
+              set({ error: null });
+            }
+          }, 3000);
+        }
+      }, 60000);  // 60秒超时
 
-    set((state) => ({
-      messages: [...state.messages, userMessage],
-      status: 'generating',
-      messageTimeout: timeout
-    }));
+      set({ messageTimeout: timeout });
+
+    } catch (error: any) {
+      console.error('Failed to send message:', error);
+      set({
+        status: 'connected',
+        error: error.response?.data?.detail || '发送消息失败'
+      });
+
+      // 3秒后清除错误
+      setTimeout(() => {
+        set({ error: null });
+      }, 3000);
+    }
   },
 
   stopGeneration: () => {
@@ -347,16 +351,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   // ✅ 编辑消息并重新生成回复
+  // 注意：编辑后会创建新的用户消息，因为 HTTP POST 总是创建消息
   editMessageAndRegenerate: async (messageId: string, newContent: string) => {
-    const { wsManager, currentSession, currentModel, messageTimeout } = get();
-
-    if (!wsManager?.isConnected) {
-      console.error('WebSocket not connected');
-      return;
-    }
+    const { currentSession } = get();
 
     if (!currentSession) {
       console.error('No active session');
+      set({ error: '没有活动会话' });
       return;
     }
 
@@ -367,39 +368,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 2. 重新加载消息列表
       await get().loadMessages(currentSession.id);
 
-      // 3. 清除旧的超时定时器
-      if (messageTimeout) {
-        clearTimeout(messageTimeout);
-      }
+      // 3. 使用 sendMessage 重新发送（这会创建一个新的用户消息）
+      // 对于用户来说，效果是：编辑后会看到更新的消息，然后AI会回复
+      await get().sendMessage(newContent);
 
-      // 4. 发送 WebSocket 消息重新生成回复（不创建新的用户消息）
-      wsManager.send({
-        type: 'send_message',
-        session_id: currentSession.id,
-        content: newContent,
-        model_id: currentModel || undefined,
-        skip_user_message: true,      // ✅ 告诉后端不要创建新的用户消息
-        edited_message_id: messageId  // ✅ 标识正在编辑的消息ID
-      });
-
-      // 5. 设置生成状态和超时
-      const timeout = setTimeout(() => {
-        set({
-          status: 'connected',
-          error: '消息生成超时，请重试',
-          messageTimeout: null,
-          streamingMessage: null
-        });
-      }, 300000); // 5分钟超时
-
-      set({ status: 'generating', messageTimeout: timeout });
-
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to edit message and regenerate', error);
       set({
-        status: 'error',
-        error: error instanceof Error ? error.message : '编辑消息失败'
+        status: 'connected',
+        error: error.response?.data?.detail || '编辑消息失败'
       });
+
+      // 3秒后清除错误
+      setTimeout(() => {
+        set({ error: null });
+      }, 3000);
     }
   },
 

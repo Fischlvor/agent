@@ -36,7 +36,6 @@ class ConnectionManager:
         """
         await websocket.accept()
         self.active_connections[user_id] = websocket
-        LOGGER.info("用户 %s 建立WebSocket连接", user_id)
 
         # 启动心跳任务
         self.heartbeat_tasks[user_id] = asyncio.create_task(
@@ -57,7 +56,6 @@ class ConnectionManager:
         # 移除连接
         if user_id in self.active_connections:
             del self.active_connections[user_id]
-            LOGGER.info("用户 %s 断开WebSocket连接", user_id)
 
     async def send_message(self, user_id: str, message: dict):
         """向指定用户发送消息
@@ -102,7 +100,6 @@ class ConnectionManager:
         """
         key = f"{user_id}:{session_id}"
         self.stop_generation_flags[key] = True
-        LOGGER.info(f"设置停止生成标志: {key}")
 
     def check_stop_generation(self, user_id: str, session_id: str) -> bool:
         """检查是否需要停止生成
@@ -127,7 +124,6 @@ class ConnectionManager:
         key = f"{user_id}:{session_id}"
         if key in self.stop_generation_flags:
             del self.stop_generation_flags[key]
-            LOGGER.info(f"清除停止生成标志: {key}")
 
 
 # 全局连接管理器
@@ -172,75 +168,17 @@ async def websocket_chat_endpoint(
                 message = json.loads(data)
                 msg_type = message.get("type")
 
-                LOGGER.info("收到用户 %s 的消息: %s", user_id, msg_type)
-
                 # 处理不同类型的消息
                 if msg_type == "ping":
                     # 心跳响应
                     await manager.send_message(user_id, {"type": "pong"})
 
                 elif msg_type == "send_message":
-                    # 发送聊天消息
-                    session_id = UUID(message.get("session_id"))
-                    content = message.get("content")
-                    model_id = message.get("model_id")
-                    skip_user_message = message.get("skip_user_message", False)  # ✅ 支持跳过创建用户消息
-                    edited_message_id = message.get("edited_message_id")  # ✅ 编辑的消息ID
-
-                    if not content:
-                        await manager.send_message(user_id, {
-                            "type": "error",
-                            "error": "消息内容不能为空"
-                        })
-                        continue
-
-                    # ✅ 每次处理消息时创建新的数据库会话（避免长事务）
-                    db_session = SESSION_LOCAL()
-                    try:
-                        chat_service = ChatService(db_session)
-
-                        # ✅ 生成开始前清除停止标志
-                        manager.clear_stop_generation(user_id, str(session_id))
-
-                        # 流式生成回复（带超时和错误处理）
-                        async for chunk in chat_service.send_message_streaming(
-                            session_id=session_id,
-                            user=user,
-                            content=content,
-                            model_id=model_id,
-                            skip_user_message=skip_user_message,  # ✅ 传递参数
-                            edited_message_id=UUID(edited_message_id) if edited_message_id else None  # ✅ 传递编辑的消息ID
-                        ):
-                            # ✅ 检查停止标志
-                            if manager.check_stop_generation(user_id, str(session_id)):
-                                LOGGER.info("用户 %s 停止生成，会话 %s", user_id, session_id)
-                                await manager.send_message(user_id, {
-                                    "type": "info",
-                                    "message": "已停止生成"
-                                })
-                                manager.clear_stop_generation(user_id, str(session_id))
-                                break
-
-                            # 检查连接是否仍然活跃
-                            if user_id not in manager.active_connections:
-                                LOGGER.warning("用户 %s 连接已断开，停止发送消息", user_id)
-                                break
-                            await manager.send_message(user_id, chunk)
-                    except asyncio.TimeoutError:
-                        LOGGER.error("用户 %s 消息处理超时", user_id)
-                        await manager.send_message(user_id, {
-                            "type": "error",
-                            "error": "消息处理超时，请稍后重试"
-                        })
-                    except Exception as stream_error:
-                        LOGGER.exception("用户 %s 流式生成消息时出错", user_id)
-                        await manager.send_message(user_id, {
-                            "type": "error",
-                            "error": f"生成消息时出错: {str(stream_error)}"
-                        })
-                    finally:
-                        # ✅ 确保数据库会话被正确关闭
-                        db_session.close()
+                    # ⚠️ 已废弃：请使用 POST /api/v1/chat/sessions/{session_id}/messages
+                    await manager.send_message(user_id, {
+                        "type": "error",
+                        "error": "send_message 已废弃，请使用 POST /api/v1/chat/sessions/{session_id}/messages"
+                    })
 
                 elif msg_type == "stop_generation":
                     # ✅ 实现停止生成逻辑
@@ -266,12 +204,10 @@ async def websocket_chat_endpoint(
 
             except WebSocketDisconnect:
                 # WebSocket正常断开，退出循环
-                LOGGER.info("用户 %s WebSocket连接断开", user_id)
                 break
             except RuntimeError as e:
                 # 处理 "Cannot call 'receive' once a disconnect message has been received" 错误
                 if "disconnect" in str(e).lower():
-                    LOGGER.info("用户 %s 连接已断开（RuntimeError）", user_id)
                     break
                 else:
                     LOGGER.exception("用户 %s 运行时错误", user_id)

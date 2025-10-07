@@ -281,6 +281,21 @@ class ApiClient {
     return response.data;
   }
 
+  /**
+   * 发送消息（HTTP POST）
+   * 响应会通过 WebSocket 流式推送
+   */
+  async sendMessage(sessionId: string, content: string, modelId?: string): Promise<ChatMessage> {
+    const response = await this.client.post<ChatMessage>(
+      `/chat/sessions/${sessionId}/messages`,
+      {
+        content,
+        model_id: modelId
+      }
+    );
+    return response.data;
+  }
+
   async updateMessage(messageId: string, data: UpdateMessageRequest): Promise<ChatMessage> {
     const response = await this.client.patch<ChatMessage>(`/chat/messages/${messageId}`, data);
     return response.data;

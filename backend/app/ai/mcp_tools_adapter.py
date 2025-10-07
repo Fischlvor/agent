@@ -10,6 +10,7 @@ from google.adk.tools import FunctionTool
 
 from app.ai.mcp.client import MCPClient
 from app.ai.mcp.tools_server import create_all_mcp_servers
+from app.core.redis_client import redis_service
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,15 +67,21 @@ def create_adk_tool_from_mcp(
     # 创建执行函数
     async def execute_mcp_tool(**kwargs):
         """
-        执行 MCP 工具
+        执行 MCP 工具（带缓存）
 
         这个函数会被 ADK 调用
         """
         try:
+            # ✅ 1. 先检查缓存
+            cached_result = redis_service.get_tool_result(tool_name, kwargs)
+            if cached_result:
+                LOGGER.info(f"✅ 使用缓存结果: {tool_name}")
+                return cached_result
+
             LOGGER.info(f"Executing MCP tool: {tool_name}")
             LOGGER.debug(f"Arguments: {kwargs}")
 
-            # 通过 MCP 客户端调用工具
+            # ✅ 2. 缓存未命中，执行工具
             result = await mcp_client.call_tool(
                 tool_name=tool_name,
                 arguments=kwargs,
@@ -90,6 +97,9 @@ def create_adk_tool_from_mcp(
             # 返回结果文本
             result_text = result.content[0].get("text", "")
             LOGGER.info(f"MCP tool executed successfully: {tool_name}")
+
+            # ✅ 3. 保存到缓存（1小时有效）
+            redis_service.save_tool_result(tool_name, kwargs, result_text, expire_seconds=3600)
 
             return result_text
 

@@ -85,7 +85,7 @@ class SessionListResponse(BaseModel):
 # ============ 消息相关 ============
 
 class MessageCreate(BaseModel):
-    """创建消息的请求Schema（通过WebSocket发送）"""
+    """创建消息的请求Schema（通过HTTP POST发送，响应通过WebSocket流式返回）"""
     model_config = {"protected_namespaces": ()}  # 禁用 model_ 命名空间保护
 
     content: str = Field(..., description="消息内容")

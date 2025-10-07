@@ -19,6 +19,13 @@ from app.ai.clients.base import BaseAIClient
 
 LOGGER = logging.getLogger(__name__)
 
+# ============ 全局缓存（跨实例共享）============
+# 避免每次创建新的 ADKAgentAdapter 实例时都重新初始化工具
+_GLOBAL_MCP_CLIENT_CACHE: Dict[str, Any] = {}
+_GLOBAL_ADK_TOOLS_CACHE: Dict[str, List] = {}
+_GLOBAL_AGENT_CACHE: Dict[str, Any] = {}  # Agent 实例缓存
+_GLOBAL_RUNNER_CACHE: Dict[str, Any] = {}  # Runner 实例缓存
+
 
 class ADKAgentAdapter:
     """
@@ -72,8 +79,8 @@ class ADKAgentAdapter:
         流式运行 Agent（保持原接口）
 
         Args:
-            messages: 对话历史 [{"role": "user", "content": "..."}]
-            system_prompt: 系统提示
+            messages: 对话历史
+            system_prompt: 系统提示词（作为第一条消息传递给 LLM）
             tools: 工具列表（OpenAI 格式的 schema）
             user_id: 用户ID（用于区分不同用户的会话）
             session_id: 会话ID（用于保持历史上下文）
@@ -84,45 +91,52 @@ class ADKAgentAdapter:
             - {"type": "tool_call", "name": "...", "args": {...}}
             - {"type": "tool_result", "name": "...", "result": "..."}
         """
-        # 🔍 调试日志
-        LOGGER.info("🚀 [ADKAgentAdapter] run_streaming 开始")
-        LOGGER.info(f"   消息数: {len(messages)}")
-        LOGGER.info(f"   最后消息: {messages[-1] if messages else 'None'}")
+        # 如果提供了 system_prompt，且第一条消息不是 system，则插入到开头
+        if system_prompt and (not messages or messages[0].get("role") != "system"):
+            messages = [{"role": "system", "content": system_prompt}] + messages
 
-        # ============ 步骤 1：创建 ADK Agent 和 Runner ============
-        # ✅ 使用真正的 MCP 协议加载工具
-        if tools:
-            # TODO: 未来可以根据传入的 tools 参数筛选 MCP 工具
-            LOGGER.warning("⚠️  忽略传入的 tools 参数，使用 MCP 动态加载")
+        # ============ 步骤 1：获取或创建 ADK Agent 和 Runner（带全局缓存）============
+        cache_key = f"{session_id or 'default'}:{self.adk_llm.model_name}"  # 包含模型名，不同模型使用不同缓存
 
-        LOGGER.info("🌐 使用真正的 MCP 协议加载工具")
-        mcp_client = await setup_mcp_tools_for_session(session_id or "default")
-        adk_tools = await create_mcp_tools_for_adk(mcp_client)
-        LOGGER.info(f"✅ 通过 MCP 加载了 {len(adk_tools)} 个工具")
+        # ✅ 使用全局缓存，避免每次创建新实例都重新初始化
+        if cache_key not in _GLOBAL_RUNNER_CACHE:
+            LOGGER.info(f"为会话 {cache_key} 初始化 Agent 和工具（首次创建）")
 
-        # 创建 ADK Agent
-        self.adk_agent = Agent(
-            name="chat_agent",
-            model=self.adk_llm,
-            instruction=system_prompt or "You are a helpful assistant. When users ask for real-time information like weather, always use the available tools to get accurate data.",
-            tools=adk_tools,
-        )
+            # 创建 MCP client 和工具
+            mcp_client = await setup_mcp_tools_for_session(session_id or "default")
+            adk_tools = await create_mcp_tools_for_adk(mcp_client)
 
-        # 创建 Runner
-        self.adk_runner = Runner(
-            app_name="chat_app",  # ✅ 必需参数
-            agent=self.adk_agent,
-            session_service=self.session_service
-        )
+            # 缓存
+            _GLOBAL_MCP_CLIENT_CACHE[cache_key] = mcp_client
+            _GLOBAL_ADK_TOOLS_CACHE[cache_key] = adk_tools
+
+            # 创建 ADK Agent
+            agent = Agent(
+                name="chat_agent",
+                model=self.adk_llm,
+                tools=adk_tools,
+            )
+            _GLOBAL_AGENT_CACHE[cache_key] = agent
+
+            # 创建 Runner
+            runner = Runner(
+                app_name="chat_app",
+                agent=agent,
+                session_service=self.session_service
+            )
+            _GLOBAL_RUNNER_CACHE[cache_key] = runner
+        else:
+            LOGGER.debug(f"使用缓存的 Agent 和工具（会话 {cache_key}）")
+
+        # 使用缓存的实例
+        self.adk_agent = _GLOBAL_AGENT_CACHE[cache_key]
+        self.adk_runner = _GLOBAL_RUNNER_CACHE[cache_key]
 
         # ============ 步骤 2：准备 Runner 参数 ============
-        # ✅ 使用真实的 user_id 和 session_id（如果提供）
         adk_user_id = user_id or "default_user"
         adk_session_id = session_id or str(uuid.uuid4())
 
-        LOGGER.info(f"   ADK user_id: {adk_user_id}, session_id: {adk_session_id}")
-
-        # ✅ 将所有历史消息（除最后一条）保存到适配器，供 LLM adapter 使用
+        # 将所有消息（除最后一条）保存为历史，供 LLM adapter 使用
         self._history_messages = messages[:-1] if len(messages) > 1 else []
 
         # 将最后一条消息转换为 Content 对象（作为新消息）
@@ -132,26 +146,17 @@ class ADKAgentAdapter:
             parts=[Part(text=last_message.get("content", ""))]
         )
 
-        LOGGER.info(f"✅ 保存 {len(self._history_messages)} 条历史消息，供 LLM 使用")
-
         # ============ 步骤 3：运行 ADK Runner（流式） ============
-        LOGGER.info("🔄 开始运行 ADK Runner...")
         try:
-            event_count = 0
             async for event in self._run_adk_runner_streaming(
                 user_id=adk_user_id,
                 session_id=adk_session_id,
                 new_message=new_message
             ):
-                event_count += 1
-                if event_count <= 3 or event_count % 20 == 0:  # 只记录前3个和每20个
-                    LOGGER.info(f"   事件 #{event_count}: {event.get('type', 'unknown')}")
                 yield event
 
-            LOGGER.info(f"✅ Runner 完成，共 {event_count} 个事件")
-
         except (RuntimeError, ValueError, ConnectionError) as e:
-            LOGGER.error(f"❌ ADK Agent 运行错误: {str(e)}", exc_info=True)
+            LOGGER.error(f"ADK Agent 运行错误: {str(e)}", exc_info=True)
             # 返回错误
             yield {
                 "type": "error",
@@ -198,6 +203,39 @@ class ADKAgentAdapter:
         except (RuntimeError, ValueError, ConnectionError) as e:
             raise e
 
+    @staticmethod
+    def clear_cache(session_id: Optional[str] = None, model_name: Optional[str] = None):
+        """清理全局缓存
+
+        Args:
+            session_id: 如果指定，只清理该会话的缓存；否则清理所有缓存
+            model_name: 如果指定，只清理特定模型的缓存
+        """
+        if session_id and model_name:
+            # 清理指定会话和模型
+            cache_key = f"{session_id}:{model_name}"
+            _GLOBAL_MCP_CLIENT_CACHE.pop(cache_key, None)
+            _GLOBAL_ADK_TOOLS_CACHE.pop(cache_key, None)
+            _GLOBAL_AGENT_CACHE.pop(cache_key, None)
+            _GLOBAL_RUNNER_CACHE.pop(cache_key, None)
+            LOGGER.info(f"已清理会话 {cache_key} 的缓存")
+        elif session_id:
+            # 清理指定会话的所有模型
+            keys_to_remove = [k for k in _GLOBAL_RUNNER_CACHE.keys() if k.startswith(f"{session_id}:")]
+            for key in keys_to_remove:
+                _GLOBAL_MCP_CLIENT_CACHE.pop(key, None)
+                _GLOBAL_ADK_TOOLS_CACHE.pop(key, None)
+                _GLOBAL_AGENT_CACHE.pop(key, None)
+                _GLOBAL_RUNNER_CACHE.pop(key, None)
+            LOGGER.info(f"已清理会话 {session_id} 的所有缓存")
+        else:
+            # 清理所有缓存
+            _GLOBAL_MCP_CLIENT_CACHE.clear()
+            _GLOBAL_ADK_TOOLS_CACHE.clear()
+            _GLOBAL_AGENT_CACHE.clear()
+            _GLOBAL_RUNNER_CACHE.clear()
+            LOGGER.info("已清理所有会话的缓存")
+
     def _frontend_to_chat_format(self, frontend_event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         转换前端事件为 ChatService 格式（最后一层适配）
@@ -239,6 +277,12 @@ class ADKAgentAdapter:
                 "type": "tool_result",
                 "tool_name": tool_result.get("name", ""),  # 需要工具名称来匹配
                 "result": tool_result.get("result")
+            }
+        elif event_type == "usage":
+            # ✅ Token 统计信息
+            return {
+                "type": "usage",
+                "usage": frontend_event.get("usage", {})
             }
         elif event_type == "error":
             return {

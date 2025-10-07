@@ -1,11 +1,26 @@
 """主应用模块，定义FastAPI应用实例和配置。"""
 
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import SETTINGS
 from app.core.redis_client import redis_service
+from app.middleware.rate_limit import RateLimitMiddleware
+
+# ============ 配置日志 ============
+# 配置根日志记录器，确保应用程序的日志也能输出
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# 确保应用程序模块的日志输出
+logging.getLogger("app").setLevel(logging.INFO)
 
 # 创建FastAPI应用
 APP = FastAPI(
@@ -21,6 +36,22 @@ APP.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# ✅ 添加频率限制中间件（每分钟最多60次请求）
+APP.add_middleware(
+    RateLimitMiddleware,
+    max_requests=60,
+    window_seconds=60,
+    exclude_paths=[
+        "/api/v1/auth/login",
+        "/api/v1/auth/send-code",
+        "/api/v1/health",
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/api/v1/chat/ws"  # WebSocket 不限流
+    ]
 )
 
 # 注册API路由

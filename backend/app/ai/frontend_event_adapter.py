@@ -40,6 +40,18 @@ class FrontendEventAdapter:
             event_type = type(adk_event).__name__
             print(f"[ADK→Frontend] {event_type}")
 
+        # ✅ 提取 token 统计信息（如果有）
+        if hasattr(adk_event, 'usage_metadata') and adk_event.usage_metadata:
+            usage = adk_event.usage_metadata
+            yield {
+                "type": "usage",
+                "usage": {
+                    "prompt_tokens": getattr(usage, 'prompt_token_count', 0),
+                    "completion_tokens": getattr(usage, 'candidates_token_count', 0),
+                    "total_tokens": getattr(usage, 'total_token_count', 0)
+                }
+            }
+
         # ✅ 一次处理所有内容（文本 + 工具调用都在 content.parts 里）
         if hasattr(adk_event, 'content') and adk_event.content:
             # 处理文本内容

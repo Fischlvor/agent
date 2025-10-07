@@ -7,7 +7,7 @@ ADK LLM 适配器
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from google.adk.models import BaseLlm
 from google.adk.models import LlmRequest, LlmResponse
-from google.genai.types import Content, Part, FunctionCall
+from google.genai.types import Content, Part, FunctionCall, GenerateContentResponseUsageMetadata
 from app.ai.clients.base import BaseAIClient
 
 
@@ -53,30 +53,38 @@ class ADKLlmAdapter(BaseLlm):
         # ============ 步骤 1：转换请求格式 ============
         our_messages = self._convert_request_to_our_format(llm_request)
 
-        # ✅ 如果有历史消息，将其添加到请求前面
+        # 如果有历史消息，将其添加到请求前面
         if hasattr(self, 'agent_adapter') and hasattr(self.agent_adapter, '_history_messages'):
             history = self.agent_adapter._history_messages
             if history:
-                # 将历史消息插入到当前请求前面
                 our_messages = history + our_messages
 
-        # ✅ 提取工具定义（从 config.tools）
+        # 提取工具定义
         our_tools = self._extract_tools_from_request(llm_request)
 
         # ============ 步骤 2：调用流式客户端 ============
         accumulated_content = ""
+        usage_metadata = None  # 用于保存 token 统计信息
 
-        # ✅ chat 方法支持 stream 参数
         response = await self.our_client.chat(
             messages=our_messages,
             system_prompt=None,
-            tools=our_tools,  # ✅ 传递工具
-            stream=True,  # ✅ 启用流式
+            tools=our_tools,
+            stream=True,
             **kwargs
         )
 
         # 处理流式响应
+        has_tool_call = False
         async for chunk in response:
+            # ✅ 提取 token 统计信息（最后一个 chunk 包含）
+            if chunk.get("done") and ("prompt_eval_count" in chunk or "eval_count" in chunk):
+                usage_metadata = GenerateContentResponseUsageMetadata(
+                    prompt_token_count=chunk.get("prompt_eval_count", 0),
+                    candidates_token_count=chunk.get("eval_count", 0),
+                    total_token_count=(chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0))
+                )
+
             # ✅ Ollama 流式响应格式：{"message": {"role": "assistant", "content": "..."}, "done": false}
             if "message" in chunk:
                 message = chunk["message"]
@@ -92,6 +100,7 @@ class ADKLlmAdapter(BaseLlm):
 
                 # ✅ 处理工具调用
                 if "tool_calls" in message and message["tool_calls"]:
+                    has_tool_call = True
                     # 转换工具调用为 ADK 格式
                     function_calls = []
                     for tool_call in message["tool_calls"]:
@@ -117,9 +126,20 @@ class ADKLlmAdapter(BaseLlm):
                         adk_response = LlmResponse(
                             content=response_content,
                             turn_complete=True,  # 工具调用表示一轮完成
-                            finish_reason="STOP"  # ✅ ADK 通过 parts 中的 FunctionCall 判断工具调用
+                            finish_reason="STOP",  # ✅ ADK 通过 parts 中的 FunctionCall 判断工具调用
+                            usage_metadata=usage_metadata  # ✅ 添加 token 统计
                         )
                         yield adk_response
+
+        # ✅ 流式结束：如果没有工具调用，返回一个完成标记（包含 usage_metadata）
+        if accumulated_content and not has_tool_call:
+            final_response = LlmResponse(
+                content=Content(role="model", parts=[Part(text="")]),  # 空内容，仅作为结束标记
+                turn_complete=True,
+                finish_reason="STOP",
+                usage_metadata=usage_metadata  # ✅ 添加 token 统计
+            )
+            yield final_response
 
         # ============ 步骤 3：如果没有流式内容，返回完整响应（降级） ============
         if not accumulated_content:
