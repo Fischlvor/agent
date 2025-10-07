@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.ai.adk_agent_adapter import AgentService  # ✅ 使用 ADK Agent 适配器
 from app.ai.factory import FACTORY
 from app.constants import EventType, ContentType, MessageStatus
+from app.core.prompts import DEFAULT_SYSTEM_PROMPT
+from app.core.redis_client import redis_service
 from app.models.ai_model import AIModel
 from app.models.chat import ChatMessage
 from app.models.session import ChatSession
@@ -250,6 +252,49 @@ class ChatService:
         return True
 
     # ============ 消息管理 ============
+
+    def create_user_message(
+        self,
+        session_id: UUID,
+        user: User,
+        content: str,
+        model_id: Optional[str] = None
+    ) -> ChatMessage:
+        """创建用户消息
+
+        Args:
+            session_id: 会话ID
+            user: 用户对象
+            content: 消息内容
+            model_id: 模型ID
+
+        Returns:
+            创建的用户消息对象
+        """
+        session = self.get_session(session_id, user)
+        if not session:
+            raise ValueError("会话不存在")
+
+        # 创建用户消息
+        user_message = ChatMessage(
+            message_id=str(uuid4()),
+            session_id=session.id,
+            role="user",
+            content=content,
+            message_type="text",
+            status="completed",
+            model_name=model_id or session.ai_model,
+            sent_at=datetime.utcnow()
+        )
+
+        self.db.add(user_message)
+        session.last_activity_at = datetime.utcnow()
+        session.message_count += 1
+
+        self.db.commit()
+        self.db.refresh(user_message)
+
+        return user_message
 
     def get_messages(
         self,
@@ -585,10 +630,24 @@ class ChatService:
         timeline = []  # ✅ 记录事件时间线（thinking、tool_call、content）
         start_time = datetime.utcnow()
 
+        # ✅ Token 统计信息
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
+        # ✅ 从缓存获取用户系统提示词（优先级：缓存 > 会话设置 > 默认值）
+        cached_system_prompt = redis_service.get_user_preference(str(user.id), "system_prompt")
+        if cached_system_prompt:
+            system_prompt = cached_system_prompt
+        else:
+            system_prompt = session.system_prompt or DEFAULT_SYSTEM_PROMPT
+            # 保存到缓存（24小时）
+            redis_service.save_user_preference(str(user.id), "system_prompt", system_prompt, expire_seconds=86400)
+
         try:
             async for chunk in agent.run_streaming(
                 messages=messages,
-                system_prompt=session.system_prompt,
+                system_prompt=system_prompt,
                 tools=None,  # ✅ 工具通过 ADK 自动加载（adk_agent_adapter.py）
                 user_id=str(user.id),  # ✅ 传递真实的用户ID
                 session_id=str(session_id)  # ✅ 传递真实的会话ID
@@ -823,6 +882,13 @@ class ChatService:
                     )
                     message_index += 1
 
+                elif chunk["type"] == "usage":
+                    # ✅ Token 统计信息
+                    usage = chunk.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    total_tokens = usage.get("total_tokens", 0)
+
             # 生成完成，保存助手消息
             generation_time = (datetime.utcnow() - start_time).total_seconds()
 
@@ -846,8 +912,14 @@ class ChatService:
                 message_type="text",
                 model_name=target_model_id,
                 generation_time=generation_time,
-                structured_content=structured_content
+                structured_content=structured_content,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens
             )
+
+            # ✅ 清除会话摘要缓存（会话内容已更新）
+            redis_service.delete_session_summary(str(session_id))
 
             # 发送done消息，使用数据库中的真实message_id
             event_id, current_event_type = self._get_next_event_id(
