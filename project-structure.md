@@ -44,15 +44,23 @@ agent-project/
 │   │   ├── ai/                  # AI服务层
 │   │   │   ├── __init__.py
 │   │   │   ├── factory.py       # AI客户端工厂
-│   │   │   ├── function_calling.py # 函数调用处理
+│   │   │   ├── adk_agent_adapter.py    # ADK Agent 主适配器（核心入口）
+│   │   │   ├── adk_llm_adapter.py      # LLM 客户端适配器
+│   │   │   ├── adk_session_service.py  # ADK 会话服务
+│   │   │   ├── frontend_event_adapter.py # 前端事件格式转换
+│   │   │   ├── mcp_tools_adapter.py    # MCP → ADK 工具适配
 │   │   │   ├── clients/         # AI客户端
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── base.py      # AI客户端抽象基类/接口
-│   │   │   │   └── qwen_client.py  # 阿里云千问客户端
+│   │   │   │   └── qwen_client.py  # Ollama/Qwen 客户端
+│   │   │   ├── mcp/             # 真正的 MCP 协议实现
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── protocol.py  # MCP 协议定义（JSON-RPC 2.0）
+│   │   │   │   ├── server.py    # MCP Server 基类
+│   │   │   │   ├── client.py    # MCP Client 实现
+│   │   │   │   └── tools_server.py # 具体工具服务器
 │   │   │   └── tools/           # 工具
 │   │   │       ├── __init__.py
-│   │   │       ├── registry.py  # 工具注册表
-│   │   │       ├── executor.py  # 工具执行器
 │   │   │       ├── base.py      # 工具抽象基类/接口
 │   │   │       └── general/     # 通用工具目录
 │   │   │           ├── __init__.py
@@ -156,17 +164,24 @@ agent-project/
    - `history_service.py`: 管理聊天历史
    - `session_service.py`: 管理用户会话
 
-3. **AI服务层**：AI模型集成和工具管理
+3. **AI服务层**：基于 Google ADK 和 MCP 的 AI 集成
+   - `adk_agent_adapter.py`: ADK Agent 主适配器（核心入口）
+   - `adk_llm_adapter.py`: LLM 客户端适配器（适配到 ADK BaseLlm 接口）
+   - `adk_session_service.py`: ADK 会话服务（SDK 层面会话管理）
+   - `frontend_event_adapter.py`: 前端事件格式转换（ADK → 前端展示）
+   - `mcp_tools_adapter.py`: MCP 工具适配器（MCP → ADK FunctionTool）
    - `factory.py`: AI客户端工厂
-   - `function_calling.py`: 模拟函数调用处理
-   - `clients/`: 各种AI模型的客户端
+   - `clients/`: AI模型客户端
      - `base.py`: AI客户端抽象基类/接口
-     - `qwen_client.py`: 阿里云千问模型客户端
-   - `tools/`: 工具系统
-     - `registry.py`: 工具注册表
-     - `executor.py`: 工具执行器
+     - `qwen_client.py`: Ollama/Qwen 模型客户端
+   - `mcp/`: 真正的 MCP 协议实现（JSON-RPC 2.0）
+     - `protocol.py`: MCP 协议数据结构定义
+     - `server.py`: MCP Server 基类（InProcessMCPServer, StdioMCPServer）
+     - `client.py`: MCP Client 实现（管理多个 MCP 服务器）
+     - `tools_server.py`: 具体工具服务器（Calculator, Weather, Search）
+   - `tools/`: 工具实现
      - `base.py`: 工具抽象基类/接口
-     - `general/`: 通用工具目录
+     - `general/`: 通用工具目录（Calculator, Weather, Search）
 
 4. **WebSocket层**：实时通信
    - `connection.py`: 连接管理
@@ -206,14 +221,35 @@ agent-project/
 
 ## 数据流
 
-1. 用户在前端输入消息
-2. 消息通过WebSocket发送到后端
-3. 后端处理消息并传递给AI服务
-4. AI服务决定是否调用工具
-5. 工具执行结果返回给AI服务
-6. AI服务生成响应
-7. 响应通过WebSocket流式返回给前端
-8. 前端实时显示响应
+### 用户对话流程
+
+1. **前端** → 用户在前端输入消息
+2. **WebSocket** → 消息通过 WebSocket 发送到后端
+3. **ChatService（业务层）** → 保存用户消息到数据库，加载历史消息
+4. **ADK Agent（AI层）** → 调用 ADK Agent 适配器处理对话
+5. **MCP Client** → 通过 MCP 协议动态加载工具（Calculator, Weather, Search）
+6. **ADK Runner** → 自动管理多轮思考和工具调用
+   - LLM 生成 thinking（思考过程）
+   - LLM 决定调用工具
+   - MCP Server 执行工具
+   - 工具结果返回给 LLM
+   - LLM 生成最终回复
+7. **Frontend Event Adapter** → 将 ADK 事件转换为前端展示格式
+8. **ChatService** → 保存助手消息到数据库（包含 timeline）
+9. **WebSocket** → 流式返回事件给前端（thinking, tool_call, content）
+10. **前端** → 实时显示 AI 响应
+
+### 会话管理（双层架构）
+
+**业务层（ChatService + 数据库）**：
+- 永久存储会话和消息
+- 用户管理、权限控制
+- 消息编辑、删除、统计
+
+**SDK层（SimpleSessionService + 内存）**：
+- ADK 内部运行时状态
+- 临时缓存当前对话的 592 个内部事件
+- 自动管理多轮上下文传递
 
 ---
 
