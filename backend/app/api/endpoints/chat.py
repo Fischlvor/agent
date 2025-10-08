@@ -80,7 +80,7 @@ def create_session(
         temperature=request.temperature,
         max_tokens=request.max_tokens
     )
-    return session
+    return chat_service.enrich_session_with_context_info(session)
 
 
 @router.get("/sessions", response_model=SessionListResponse)
@@ -107,8 +107,15 @@ def get_sessions(
         cursor=cursor,
         limit=limit
     )
+
+    # ✅ 为每个会话添加上下文使用信息
+    enriched_sessions = [
+        chat_service.enrich_session_with_context_info(session)
+        for session in sessions
+    ]
+
     return SessionListResponse(
-        sessions=sessions,
+        sessions=enriched_sessions,
         next_cursor=next_cursor,
         has_more=has_more
     )
@@ -137,7 +144,8 @@ def get_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="会话不存在"
         )
-    return session
+    # ✅ 添加上下文使用信息
+    return chat_service.enrich_session_with_context_info(session)
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionResponse)
@@ -169,7 +177,7 @@ def update_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="会话不存在"
         )
-    return session
+    return chat_service.enrich_session_with_context_info(session)
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

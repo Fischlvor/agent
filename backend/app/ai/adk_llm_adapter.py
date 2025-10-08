@@ -4,11 +4,14 @@ ADK LLM 适配器
 将我们的 LLM 客户端（QwenClient, OpenAIClient 等）适配到 ADK 的 BaseLlm 接口
 """
 
+import logging
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from google.adk.models import BaseLlm
 from google.adk.models import LlmRequest, LlmResponse
 from google.genai.types import Content, Part, FunctionCall, GenerateContentResponseUsageMetadata
 from app.ai.clients.base import BaseAIClient
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ADKLlmAdapter(BaseLlm):
@@ -79,10 +82,13 @@ class ADKLlmAdapter(BaseLlm):
         async for chunk in response:
             # ✅ 提取 token 统计信息（最后一个 chunk 包含）
             if chunk.get("done") and ("prompt_eval_count" in chunk or "eval_count" in chunk):
+                prompt_count = chunk.get("prompt_eval_count", 0)
+                completion_count = chunk.get("eval_count", 0)
+                LOGGER.info(f"🔍 Ollama原始Token统计 - prompt_eval_count: {prompt_count}, eval_count: {completion_count}, prompt_cache_hit: {chunk.get('prompt_eval_duration', 0) == 0}")
                 usage_metadata = GenerateContentResponseUsageMetadata(
-                    prompt_token_count=chunk.get("prompt_eval_count", 0),
-                    candidates_token_count=chunk.get("eval_count", 0),
-                    total_token_count=(chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0))
+                    prompt_token_count=prompt_count,
+                    candidates_token_count=completion_count,
+                    total_token_count=(prompt_count + completion_count)
                 )
 
             # ✅ Ollama 流式响应格式：{"message": {"role": "assistant", "content": "..."}, "done": false}

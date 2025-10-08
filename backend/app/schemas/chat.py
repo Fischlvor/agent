@@ -67,12 +67,17 @@ class SessionResponse(BaseModel):
     last_activity_at: Optional[datetime] = None
     message_count: int = 0
     total_tokens: int = 0
+    current_context_tokens: int = 0
     ai_model: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 4000
     system_prompt: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    # 计算属性
+    max_context_tokens: Optional[int] = Field(None, description="模型最大上下文长度")
+    context_usage_percent: Optional[float] = Field(None, description="上下文使用百分比")
 
 
 class SessionListResponse(BaseModel):

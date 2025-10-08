@@ -373,7 +373,7 @@ class ChatService:
         user: User,
         new_content: str
     ) -> Optional[ChatMessage]:
-        """编辑消息（创建新消息，软删除原消息及后续所有回复）
+        """编辑消息（创建新消息，处理摘要，软删除原消息及后续回复）
 
         Args:
             message_id: 原消息ID
@@ -401,48 +401,87 @@ class ChatService:
         if not session:
             return None
 
-        # ✅ 1. 软删除原消息（保留审计历史）
+        session_id = original_message.session_id
+
+        # ✅ 统一处理逻辑（适用所有场景）
+
+        # 1. 检查是否有摘要消息
+        summary_message = self.db.query(ChatMessage).filter(
+            and_(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_summary == True,
+                ChatMessage.is_deleted == False
+            )
+        ).first()
+
+        # 2. 如果被编辑的消息已被摘要，需要恢复上下文
+        if original_message.is_summarized:
+            LOGGER.info(f"📝 编辑已摘要的消息 {message_id}，恢复历史上下文")
+
+            # 恢复该消息及之前所有被摘要的消息
+            messages_to_restore = self.db.query(ChatMessage).filter(
+                and_(
+                    ChatMessage.session_id == session_id,
+                    ChatMessage.is_summarized == True,
+                    ChatMessage.created_at <= original_message.created_at
+                )
+            ).all()
+
+            for msg in messages_to_restore:
+                msg.is_summarized = False
+
+            # 删除摘要消息
+            if summary_message:
+                summary_message.is_deleted = True
+                LOGGER.info(f"🗑️ 删除摘要消息，恢复完整历史")
+
+        # 3. 软删除原消息
         original_message.is_deleted = True
 
-        # ✅ 2. 软删除该消息之后的所有消息（保留审计历史）
+        # 4. 软删除该消息之后的所有消息（包括摘要消息之后的）
         later_messages = self.db.query(ChatMessage).filter(
             and_(
-                ChatMessage.session_id == original_message.session_id,
+                ChatMessage.session_id == session_id,
                 ChatMessage.created_at > original_message.created_at,
-                ChatMessage.is_deleted == False  # 只处理未删除的消息
+                ChatMessage.is_deleted == False
             )
         ).all()
 
         for msg in later_messages:
             msg.is_deleted = True
+            LOGGER.debug(f"🗑️ 软删除后续消息: {msg.id}")
 
-        # ✅ 3. 创建新消息（内容为编辑后的内容）
+        # 5. 创建新消息（编辑后的内容）
         now = datetime.utcnow()
         new_message = ChatMessage(
             message_id=str(uuid4()),
-            session_id=original_message.session_id,
-            parent_message_id=str(message_id),  # ✅ 记录父消息ID，可追踪编辑历史
+            session_id=session_id,
+            parent_message_id=str(message_id),
             role=original_message.role,
             content=new_content,
             message_type=original_message.message_type,
-            is_edited=True,  # ✅ 标记为编辑后的消息
+            is_edited=True,
             is_deleted=False,
+            is_summarized=False,  # 新消息不被摘要
             created_at=now,
-            sent_at=now  # ✅ 设置发送时间
+            sent_at=now
         )
         self.db.add(new_message)
         self.db.commit()
         self.db.refresh(new_message)
 
-        # ✅ 4. 更新会话统计（只统计未删除的消息）
+        # 6. 更新会话统计和上下文token
         session.message_count = self.db.query(ChatMessage).filter(
             and_(
-                ChatMessage.session_id == original_message.session_id,
+                ChatMessage.session_id == session_id,
                 ChatMessage.is_deleted == False
             )
         ).count()
+        session.current_context_tokens = self.calculate_current_context_tokens(session_id)
         session.last_activity_at = datetime.utcnow()
         self.db.commit()
+
+        LOGGER.info(f"✅ 消息编辑完成: 新消息ID={new_message.id}, 上下文tokens={session.current_context_tokens}")
 
         return new_message
 
@@ -477,6 +516,206 @@ class ChatService:
         message.is_deleted = True
         self.db.commit()
         return True
+
+    # ============ Token 计算 ============
+
+    def enrich_session_with_context_info(
+        self,
+        session: ChatSession
+    ) -> Dict:
+        """为会话添加上下文使用信息
+
+        Args:
+            session: 会话对象
+
+        Returns:
+            包含上下文信息的字典
+        """
+        # 获取模型配置
+        model_config = self.get_model_by_id(session.ai_model or "qwen3:8b")
+        max_context = model_config.max_context_length if model_config else 32768
+
+        # 计算使用百分比
+        usage_percent = 0.0
+        if max_context > 0 and session.current_context_tokens:
+            usage_percent = round((session.current_context_tokens / max_context) * 100, 1)
+
+        # 转换为字典并添加字段
+        session_dict = {
+            "id": session.id,
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "title": session.title,
+            "description": session.description,
+            "status": session.status,
+            "is_pinned": session.is_pinned,
+            "last_activity_at": session.last_activity_at,
+            "message_count": session.message_count,
+            "total_tokens": session.total_tokens,
+            "current_context_tokens": session.current_context_tokens,
+            "ai_model": session.ai_model,
+            "temperature": session.temperature,
+            "max_tokens": session.max_tokens,
+            "system_prompt": session.system_prompt,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            # 新增字段
+            "max_context_tokens": max_context,
+            "context_usage_percent": usage_percent
+        }
+
+        return session_dict
+
+    def calculate_current_context_tokens(
+        self,
+        session_id: UUID
+    ) -> int:
+        """计算当前上下文的token总数
+
+        下一轮对话的上下文包括：
+        1. 最新消息的 prompt_tokens（之前的所有上下文）
+        2. 最新助手消息的 completion_tokens（这条回复也会成为下次的上下文）
+
+        即：current_context_tokens = latest_message.total_tokens
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            当前上下文token总数
+        """
+        # 获取最新一条未删除的助手消息
+        latest_message = self.db.query(ChatMessage).filter(
+            and_(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_deleted == False,
+                ChatMessage.role == "assistant"  # 只看助手消息，因为它有完整的token统计
+            )
+        ).order_by(ChatMessage.created_at.desc()).first()
+
+        if not latest_message or not latest_message.total_tokens:
+            return 0
+
+        # 下次对话的上下文 = 当前消息的 total_tokens
+        # (prompt_tokens + completion_tokens)
+        current_context = latest_message.total_tokens
+
+        LOGGER.debug(f"上下文Token: {current_context} (来自消息 {latest_message.id}: prompt={latest_message.prompt_tokens} + completion={latest_message.completion_tokens})")
+
+        return current_context
+
+    # ============ 摘要生成 ============
+
+    async def generate_session_summary(
+        self,
+        session_id: UUID,
+        user: User
+    ) -> Optional[ChatMessage]:
+        """生成会话摘要
+
+        Args:
+            session_id: 会话ID
+            user: 用户对象
+
+        Returns:
+            摘要消息对象，如果不需要摘要则返回None
+        """
+        session = self.get_session(session_id, user)
+        if not session:
+            raise ValueError("会话不存在")
+
+        # 获取所有未删除且未被摘要的消息
+        all_messages = self.db.query(ChatMessage).filter(
+            and_(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_deleted == False,
+                ChatMessage.is_summarized == False,
+                ChatMessage.is_summary == False
+            )
+        ).order_by(ChatMessage.created_at).all()
+
+        # 如果消息少于6条，不需要摘要
+        if len(all_messages) <= 5:
+            LOGGER.info(f"会话 {session_id} 消息数不足，无需生成摘要")
+            return None
+
+        # 保留最近5条，其他的生成摘要
+        messages_to_summarize = all_messages[:-5]
+        messages_to_keep = all_messages[-5:]
+
+        # 构建摘要提示词
+        conversation_text = "\n\n".join([
+            f"{msg.role}: {msg.content}"
+            for msg in messages_to_summarize
+        ])
+
+        summary_prompt = f"""请对以下对话进行简洁的摘要，保留关键信息和上下文：
+
+{conversation_text}
+
+要求：
+1. 概括主要讨论的话题和结论
+2. 保留重要的事实信息
+3. 控制在200字以内
+
+摘要："""
+
+        # 调用LLM生成摘要
+        model_config = self.get_model_by_id(session.ai_model or "qwen3:8b")
+        if not model_config:
+            raise ValueError("模型不存在")
+
+        client = FACTORY.create_client(
+            provider=model_config.provider,
+            model_name=model_config.model_name,
+            api_base=model_config.api_base
+        )
+
+        try:
+            # 非流式调用生成摘要
+            response = await client.chat(
+                messages=[{"role": "user", "content": summary_prompt}],
+                stream=False
+            )
+            summary_content = response.get("content", "")
+
+            # 创建摘要消息
+            summary_message = ChatMessage(
+                message_id=str(uuid4()),
+                session_id=session_id,
+                role="system",
+                content=f"【对话摘要】{summary_content}",
+                message_type="summary",
+                is_summary=True,
+                sent_at=datetime.utcnow(),
+                status="sent",
+                # Token统计（假设response中有，否则需要估算）
+                prompt_tokens=len(summary_prompt.split()) * 2,  # 粗略估算
+                completion_tokens=len(summary_content.split()) * 2,
+                total_tokens=len(summary_prompt.split()) * 2 + len(summary_content.split()) * 2
+            )
+
+            self.db.add(summary_message)
+
+            # 标记旧消息为已摘要
+            for msg in messages_to_summarize:
+                msg.is_summarized = True
+
+            self.db.commit()
+            self.db.refresh(summary_message)
+
+            LOGGER.info(f"✅ 会话 {session_id} 摘要已生成，覆盖 {len(messages_to_summarize)} 条消息")
+
+            # 同时保存到Redis缓存（2小时）
+            redis_service.save_session_summary(str(session_id), summary_content, expire_seconds=7200)
+
+            return summary_message
+
+        except Exception as e:
+            LOGGER.error(f"生成摘要失败: {e}")
+            return None
+        finally:
+            await client.close()
 
     # ============ AI对话 ============
 
@@ -583,33 +822,53 @@ class ChatService:
         )
         message_index += 1
 
-        # 获取历史消息
-        history_messages = self.get_messages(session_id, user, limit=20)
+        # ✅ 步骤1：检查是否需要生成摘要（在获取历史前）
+        model_max_context = model_config.max_context_length or 32768
+        should_generate_summary = False
+
+        if session.current_context_tokens >= int(model_max_context * 0.9):
+            LOGGER.info(f"🔄 会话 {session_id} 上下文达到阈值 ({session.current_context_tokens}/{model_max_context}), 触发摘要生成")
+            summary_message = await self.generate_session_summary(session_id, user)
+            should_generate_summary = True
+
+        # ✅ 步骤2：获取有效消息（未删除且未被摘要的）
+        effective_messages = self.db.query(ChatMessage).filter(
+            and_(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_deleted == False,
+                ChatMessage.is_summarized == False  # 不包含已被摘要的
+            )
+        ).order_by(ChatMessage.created_at).all()
+
+        # ✅ 步骤3：获取摘要消息（如果有）
+        summary_message = self.db.query(ChatMessage).filter(
+            and_(
+                ChatMessage.session_id == session_id,
+                ChatMessage.is_summary == True,
+                ChatMessage.is_deleted == False
+            )
+        ).order_by(ChatMessage.created_at.desc()).first()
+
+        # ✅ 步骤4：构建上下文消息列表（摘要 + 有效消息）
+        messages = []
+
+        # 添加摘要（如果有）
+        if summary_message:
+            messages.append({"role": "system", "content": summary_message.content})
+            LOGGER.info(f"✅ 包含摘要消息: {summary_message.content[:50]}...")
 
         # ✅ 根据是否跳过用户消息来决定如何处理历史
         if skip_user_message:
-            # 编辑重新生成：使用全部历史（最后一条就是编辑后的用户消息）
-
-            # ✅ 验证编辑的消息（用于追踪和日志）
-            if edited_message_id and history_messages:
-                last_message = history_messages[-1]
-                # 验证最后一条消息是编辑后的新消息（parent_message_id 应该等于原消息ID）
-                if last_message.parent_message_id and str(last_message.parent_message_id) == str(edited_message_id):
-                    LOGGER.info(f"✅ 重新生成回复：基于编辑的消息 {edited_message_id} (新消息ID: {last_message.message_id})，新内容: {content[:50]}...")
-                else:
-                    LOGGER.warning(f"⚠️ 编辑消息ID验证失败：期望 parent_message_id={edited_message_id}，实际 message_id={last_message.message_id}, parent_message_id={last_message.parent_message_id}")
-
-            messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in history_messages
-            ]
+            # 编辑重新生成：使用全部有效消息
+            for msg in effective_messages:
+                messages.append({"role": msg.role, "content": msg.content})
         else:
             # 正常发送：排除最后一条（刚创建的用户消息），然后添加当前内容
-            messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in history_messages[:-1]
-            ]
+            for msg in effective_messages[:-1]:
+                messages.append({"role": msg.role, "content": msg.content})
             messages.append({"role": "user", "content": content})
+
+        LOGGER.info(f"📝 发送给LLM的消息数: {len(messages)}, 消息列表: {[(m['role'], len(m.get('content', ''))) for m in messages]}")
 
         # 创建AI客户端
         client = FACTORY.create_client(
@@ -918,6 +1177,12 @@ class ChatService:
                 total_tokens=total_tokens
             )
 
+            # ✅ 更新会话的 current_context_tokens
+            session.current_context_tokens = self.calculate_current_context_tokens(session_id)
+            self.db.commit()
+
+            LOGGER.info(f"✅ 会话上下文更新: {session.current_context_tokens}/{model_max_context} tokens ({session.current_context_tokens/model_max_context*100:.1f}%)")
+
             # ✅ 清除会话摘要缓存（会话内容已更新）
             redis_service.delete_session_summary(str(session_id))
 
@@ -932,7 +1197,12 @@ class ChatService:
                     "status": MessageStatus.COMPLETED,
                     "is_finish": True,
                     "message_index": message_index,
-                    "generation_time": generation_time
+                    "generation_time": generation_time,
+                    # ✅ 推送上下文信息，前端直接使用，无需额外请求
+                    "context_info": {
+                        "current_context_tokens": session.current_context_tokens,
+                        "max_context_tokens": model_max_context
+                    }
                 },
                 event_id=event_id,
                 event_type=EventType.MESSAGE_DONE
