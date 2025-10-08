@@ -9,6 +9,7 @@ import SessionSidebar from '@/components/chat/SessionSidebar';
 import MessageList from '@/components/chat/MessageList';
 import MessageInput from '@/components/chat/MessageInput';
 import ModelSelector from '@/components/chat/ModelSelector';
+import ContextProgress from '@/components/chat/ContextProgress';
 
 export default function ChatPage() {
   const router = useRouter();
@@ -137,6 +138,14 @@ export default function ChatPage() {
             <h1 className="text-lg font-semibold text-gray-800">
               {currentSession?.title || '新对话'}
             </h1>
+
+            {/* 上下文使用进度 */}
+            {currentSession?.current_context_tokens !== undefined && currentSession?.max_context_tokens !== undefined && (
+              <ContextProgress
+                currentTokens={currentSession.current_context_tokens}
+                maxTokens={currentSession.max_context_tokens}
+              />
+            )}
           </div>
 
           {/* 模型选择器 */}

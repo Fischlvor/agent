@@ -38,6 +38,8 @@ class ChatMessage(BaseModel):
     is_edited = Column(Boolean, default=False, comment="是否已编辑")
     is_deleted = Column(Boolean, default=False, comment="是否已删除")
     is_pinned = Column(Boolean, default=False, comment="是否置顶")
+    is_summarized = Column(Boolean, default=False, comment="是否已被摘要覆盖")
+    is_summary = Column(Boolean, default=False, comment="是否为摘要消息")
     sent_at = Column(DateTime, nullable=True, comment="发送时间")
     delivered_at = Column(DateTime, nullable=True, comment="送达时间")
     read_at = Column(DateTime, nullable=True, comment="已读时间")

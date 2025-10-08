@@ -41,6 +41,10 @@ export interface ChatSession {
   system_prompt?: string;
   created_at: string;
   updated_at: string;
+  // 上下文管理
+  current_context_tokens?: number;
+  max_context_tokens?: number;
+  context_usage_percent?: number;
 }
 
 export interface CreateSessionRequest {
@@ -151,6 +155,12 @@ export interface WSEventData {
   // 增强
   message_index?: number;
   generation_time?: number;
+
+  // 上下文信息（done事件专用）
+  context_info?: {
+    current_context_tokens: number;
+    max_context_tokens: number;
+  };
 }
 
 /**
@@ -278,6 +288,10 @@ export interface WSDoneMessage extends WSBaseMessage {
   generation_time?: number;
   event_id: number;
   event_type: number;
+  context_info?: {
+    current_context_tokens: number;
+    max_context_tokens: number;
+  };
 }
 
 export interface WSErrorMessage extends WSBaseMessage {
