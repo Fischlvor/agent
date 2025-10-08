@@ -41,6 +41,7 @@ class ChatSession(BaseModel):
     last_activity_at = Column(DateTime, nullable=True, comment="最后活动时间")
     message_count = Column(Integer, default=0, comment="消息数量")
     total_tokens = Column(Integer, default=0, comment="总令牌数")
+    current_context_tokens = Column(Integer, default=0, comment="当前上下文令牌数")
     ai_model = Column(String(50), nullable=True, comment="使用的AI模型")
     temperature = Column(Float, default=0.7, comment="AI模型温度参数")
     max_tokens = Column(Integer, default=4000, comment="最大令牌数限制")

@@ -21,6 +21,7 @@ class AIModel(BaseModel):
     base_url = Column(String(255), nullable=False, comment="API基础URL")
     description = Column(Text, nullable=True, comment="模型描述")
     max_tokens = Column(Integer, default=8192, comment="最大token数")
+    max_context_length = Column(Integer, default=32768, comment="最大上下文长度")
     supports_streaming = Column(Boolean, default=True, comment="是否支持流式输出")
     supports_tools = Column(Boolean, default=True, comment="是否支持工具调用")
     is_active = Column(Boolean, default=True, comment="是否启用")
