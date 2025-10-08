@@ -438,7 +438,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             message_id: eventData.message_id,
             event_id: Number(envelope.event_id),
             event_type: eventType,
-            generation_time: eventData.generation_time
+            generation_time: eventData.generation_time,
+            context_info: (eventData as any).context_info  // ✅ 提取上下文信息
           };
 
         case EventType.THINKING_START:
@@ -759,10 +760,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             timeline: streamingMessage.timeline  // ✅ 直接使用已构建的 timeline
           };
 
+          // ✅ 更新会话的上下文信息（从WS推送的数据）
+          const updatedSession = message.context_info ? {
+            ...currentSession,
+            current_context_tokens: message.context_info.current_context_tokens,
+            max_context_tokens: message.context_info.max_context_tokens,
+            context_usage_percent: (message.context_info.current_context_tokens / message.context_info.max_context_tokens) * 100
+          } : currentSession;
+
           set((state) => ({
             messages: [...state.messages, finalMessage],
             streamingMessage: null,
-            status: 'connected'
+            status: 'connected',
+            currentSession: updatedSession
           }));
         }
         break;
