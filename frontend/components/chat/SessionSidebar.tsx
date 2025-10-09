@@ -21,7 +21,7 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
 
   const handleStartEdit = (session: ChatSession, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditingSessionId(session.id);
+    setEditingSessionId(session.session_id || session.id);
     setEditingTitle(session.title || '');
   };
 
@@ -111,26 +111,26 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
           <div className="py-2">
             {sessions.map((session) => (
               <div
-                key={session.id}
-                onClick={() => handleSelectSession(session.id)}
+                key={session.session_id || session.id}
+                onClick={() => handleSelectSession(session.session_id || session.id)}
                 className={`
                   px-4 py-3 cursor-pointer transition-colors relative group
-                  ${currentSession?.id === session.id
+                  ${(currentSession?.session_id || currentSession?.id) === (session.session_id || session.id)
                     ? 'bg-primary-50 border-l-4 border-primary-500'
                     : 'hover:bg-gray-50 border-l-4 border-transparent'
                   }
                 `}
               >
-                {editingSessionId === session.id ? (
+                {editingSessionId === (session.session_id || session.id) ? (
                   <div onClick={(e) => e.stopPropagation()}>
                     <input
                       type="text"
                       value={editingTitle}
                       onChange={(e) => setEditingTitle(e.target.value)}
-                      onBlur={() => handleSaveEdit(session.id)}
+                      onBlur={() => handleSaveEdit(session.session_id || session.id)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          handleSaveEdit(session.id);
+                          handleSaveEdit(session.session_id || session.id);
                         } else if (e.key === 'Escape') {
                           handleCancelEdit();
                         }
@@ -143,9 +143,15 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
                   <>
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-gray-900 truncate text-sm mb-1">
-                          {session.title || '新对话'}
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-medium text-gray-900 truncate text-sm mb-1">
+                            {session.title || '新对话'}
+                          </h3>
+                          {/* ✅ 新消息角标 */}
+                          {session.hasNewMessage && (
+                            <span className="flex-shrink-0 w-2 h-2 bg-red-500 rounded-full"></span>
+                          )}
+                        </div>
                         <div className="flex items-center space-x-2 text-xs text-gray-500">
                           <span>{session.message_count} 条消息</span>
                           <span>•</span>
@@ -175,7 +181,7 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
                           </svg>
                         </button>
                         <button
-                          onClick={(e) => handleDelete(session.id, e)}
+                          onClick={(e) => handleDelete(session.session_id || session.id, e)}
                           className="p-1 rounded hover:bg-red-100 transition-colors"
                           title="删除"
                         >

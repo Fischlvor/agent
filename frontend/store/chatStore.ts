@@ -57,11 +57,10 @@ interface ChatState {
 
   // 消息管理
   loadMessages: (sessionId: string) => Promise<void>;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, parentMessageId?: string) => void;
   stopGeneration: () => void;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   editMessageAndRegenerate: (messageId: string, newContent: string) => Promise<void>;
-  deleteMessage: (messageId: string) => Promise<void>;
 
   // WebSocket 消息处理
   parseWSMessageEnvelope: (envelope: WSMessageEnvelope) => WSMessage | null;
@@ -199,9 +198,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   selectSession: async (sessionId: string) => {
     try {
+      // ✅ 先保存流式消息状态（防止被loadMessages清除）
+      const { streamingMessage: currentStreaming } = get();
+      const streamingBelongsToThisSession = currentStreaming &&
+        currentStreaming.session_id === sessionId;
+
+      if (currentStreaming) {
+        console.log(`[切换会话] 流式消息会话ID: ${currentStreaming.session_id}, 目标会话ID: ${sessionId}, 是否匹配: ${streamingBelongsToThisSession}`);
+      }
+
       const session = await apiClient.getSession(sessionId);
       set({ currentSession: session });
       await get().loadMessages(sessionId);
+
+      // ✅ 根据之前保存的状态恢复或清除流式消息
+      if (streamingBelongsToThisSession && currentStreaming) {
+        // 流式消息属于当前会话，恢复显示
+        set({
+          streamingMessage: currentStreaming,  // 恢复流式消息
+          status: 'generating'
+        });
+        console.log('[WebSocket] ✅ 恢复流式显示:', currentStreaming.id);
+      } else if (currentStreaming) {
+        // 流式消息属于其他会话，清空
+        set({ streamingMessage: null, status: 'connected' });
+        console.log('[WebSocket] ⏸️ 隐藏其他会话的流式消息');
+      }
+
+      // ✅ 清除该会话的未读标记
+      set((state) => ({
+        sessions: state.sessions.map((s) =>
+          (s.id === sessionId || s.session_id === sessionId)
+            ? { ...s, hasNewMessage: false }
+            : s
+        )
+      }));
     } catch (error) {
       console.error('Failed to select session', error);
     }
@@ -211,8 +242,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const updatedSession = await apiClient.updateSession(sessionId, { title });
       set((state) => ({
-        sessions: state.sessions.map((s) => (s.id === sessionId ? updatedSession : s)),
-        currentSession: state.currentSession?.id === sessionId ? updatedSession : state.currentSession
+        sessions: state.sessions.map((s) =>
+          (s.id === sessionId || s.session_id === sessionId) ? updatedSession : s
+        ),
+        currentSession: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId)
+          ? updatedSession : state.currentSession
       }));
     } catch (error) {
       console.error('Failed to update session', error);
@@ -223,9 +257,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       await apiClient.deleteSession(sessionId);
       set((state) => ({
-        sessions: state.sessions.filter((s) => s.id !== sessionId),
-        currentSession: state.currentSession?.id === sessionId ? null : state.currentSession,
-        messages: state.currentSession?.id === sessionId ? [] : state.messages
+        sessions: state.sessions.filter((s) => s.id !== sessionId && s.session_id !== sessionId),
+        currentSession: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId) ? null : state.currentSession,
+        messages: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId) ? [] : state.messages
       }));
     } catch (error) {
       console.error('Failed to delete session', error);
@@ -255,7 +289,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, parentMessageId?: string) => {
     const { wsManager, currentSession, currentModel, messageTimeout } = get();
 
     if (!wsManager?.isConnected) {
@@ -278,9 +312,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       // ✅ 通过 HTTP POST 发送消息
       const userMessage = await apiClient.sendMessage(
-        currentSession.id,
+        currentSession.session_id || currentSession.id,  // 优先使用session_id
         content,
-        currentModel || undefined
+        currentModel || undefined,
+        parentMessageId  // 传递父消息ID（用于编辑关联）
       );
 
       // ✅ 添加用户消息到本地状态
@@ -332,7 +367,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (wsManager?.isConnected && currentSession) {
       wsManager.send({
         type: 'stop_generation',
-        session_id: currentSession.id
+        session_id: currentSession.session_id || currentSession.id
       });
     }
   },
@@ -343,15 +378,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 重新加载消息
       const { currentSession } = get();
       if (currentSession) {
-        await get().loadMessages(currentSession.id);
+        await get().loadMessages(currentSession.session_id || currentSession.id);
       }
     } catch (error) {
       console.error('Failed to edit message', error);
     }
   },
 
-  // ✅ 编辑消息并重新生成回复
-  // 注意：编辑后会创建新的用户消息，因为 HTTP POST 总是创建消息
+  // ✅ 编辑消息并重新生成回复（ChatGPT模式）
+  // 流程：删除原消息和后续回复 → 发送新消息（带parent_message_id） → AI自动生成回复
   editMessageAndRegenerate: async (messageId: string, newContent: string) => {
     const { currentSession } = get();
 
@@ -362,15 +397,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     try {
-      // 1. 编辑消息（后端会删除后续所有回复）
+      // 1. 删除原消息和后续所有回复
       await apiClient.updateMessage(messageId, { content: newContent });
 
-      // 2. 重新加载消息列表
-      await get().loadMessages(currentSession.id);
+      // 2. 重新加载消息列表（原消息已被删除）
+      await get().loadMessages(currentSession.session_id || currentSession.id);
 
-      // 3. 使用 sendMessage 重新发送（这会创建一个新的用户消息）
-      // 对于用户来说，效果是：编辑后会看到更新的消息，然后AI会回复
-      await get().sendMessage(newContent);
+      // 3. 发送新消息（创建新的用户消息，带parent_message_id关联，并触发AI生成）
+      await get().sendMessage(newContent, messageId);
 
     } catch (error: any) {
       console.error('Failed to edit message and regenerate', error);
@@ -383,17 +417,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       setTimeout(() => {
         set({ error: null });
       }, 3000);
-    }
-  },
-
-  deleteMessage: async (messageId: string) => {
-    try {
-      await apiClient.deleteMessage(messageId);
-      set((state) => ({
-        messages: state.messages.filter((m) => m.id !== messageId)
-      }));
-    } catch (error) {
-      console.error('Failed to delete message', error);
     }
   },
 
@@ -416,6 +439,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return {
             type: 'start',
             message_id: eventData.message_id,
+            session_id: eventData.conversation_id,  // ✅ 提取会话ID
             event_id: Number(envelope.event_id),
             event_type: eventType
           };
@@ -426,6 +450,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return {
               type: 'content',
               delta: content.text || '',  // ✅ 统一使用 text 字段
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -436,10 +461,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return {
             type: 'done',
             message_id: eventData.message_id,
+            session_id: eventData.conversation_id,  // ✅ 提取会话ID
             event_id: Number(envelope.event_id),
             event_type: eventType,
             generation_time: eventData.generation_time,
-            context_info: (eventData as any).context_info  // ✅ 提取上下文信息
+            context_info: (eventData as any).context_info,  // ✅ 提取上下文信息
+            session_info: (eventData as any).session_info   // ✅ 提取会话信息
           };
 
         case EventType.THINKING_START:
@@ -450,6 +477,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               thinking_id: eventData.message.id,  // ✅ 从 message.id 获取
               title: content.finish_title || '',  // ✅ 对齐业界标准
               status: 'pending',
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -463,6 +491,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               type: 'thinking_delta',
               thinking_id: eventData.message.id,  // ✅ 从 message.id 获取
               delta: content.text || '',  // ✅ 统一使用 text 字段
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -477,6 +506,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               thinking_id: eventData.message.id,  // ✅ 从 message.id 获取
               title: content.finish_title || '',  // ✅ 对齐业界标准
               status: 'success',
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -491,6 +521,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               tool_id: eventData.message.id,  // ✅ 获取 tool_id
               tool_name: content.name,  // ✅ 后端发送的是 name
               tool_args: content.args,  // ✅ 后端发送的是 args
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -505,6 +536,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               tool_id: eventData.message.id,  // ✅ 获取 tool_id
               tool_name: content.name,  // ✅ 后端发送的是 name
               result: content.result,
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -517,6 +549,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return {
               type: 'error',
               error: content.error || '未知错误',
+              session_id: eventData.conversation_id,  // ✅ 提取会话ID
               event_id: Number(envelope.event_id),
               event_type: eventType
             };
@@ -525,6 +558,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         case EventType.PONG:
           return { type: 'pong' };
+
+        case EventType.SESSION_TITLE_UPDATED:
+          return {
+            type: 'session_title_updated',
+            session_id: eventData.conversation_id,
+            title: (eventData as any).title,
+            event_id: Number(envelope.event_id),
+            event_type: eventType
+          };
 
         default:
           console.warn('Unknown event type:', eventType);
@@ -539,8 +581,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleWSMessage: (message: WSMessage) => {
+    const { currentSession, messageTimeout } = get();
+
+    // ✅ 会话归属验证：如果消息不属于当前会话
+    if (message.session_id && currentSession) {
+      const currentSessionId = currentSession.session_id || currentSession.id;
+      if (message.session_id !== currentSessionId) {
+        // ✅ 如果是 MESSAGE_DONE，标记该会话有新消息
+        if (message.type === 'done') {
+          console.log(`[WebSocket] 后台会话完成: ${message.session_id}`);
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              (s.id === message.session_id || s.session_id === message.session_id)
+                ? { ...s, hasNewMessage: true }
+                : s
+            )
+          }));
+        }
+        return;  // 忽略不属于当前会话的其他消息
+      }
+    }
+
     // ✅ 清除超时定时器（除了 connected 和 pong）
-    const { messageTimeout } = get();
     if (message.type !== 'connected' && message.type !== 'pong' && messageTimeout) {
       clearTimeout(messageTimeout);
       set({ messageTimeout: null });
@@ -557,9 +619,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       case 'start':
         // 开始生成，创建流式消息
+        console.log('[WebSocket] 开始生成, message_id:', message.message_id, 'session_id:', message.session_id);
         set({
           streamingMessage: {
             id: message.message_id,
+            session_id: message.session_id || '',  // ✅ 记录会话ID
             role: 'assistant',
             content: '',
             isStreaming: true,
@@ -567,7 +631,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             timeline: [],  // ✅ 初始化 timeline
             thinkingBuffer: '',  // ✅ 用于累积当前正在进行的 thinking
             currentThinkingId: null  // ✅ 当前正在进行的 thinking 块 ID
-          }
+          },
+          status: 'generating'
         });
         break;
 
@@ -743,37 +808,86 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'done':
         // 生成完成，保存消息
         const { streamingMessage, currentSession } = get();
-        if (streamingMessage && currentSession) {
-          // ✅ 直接使用 streamingMessage.timeline
-          const finalMessage: ChatMessage = {
-            id: message.message_id,
-            session_id: currentSession.id,
-            role: 'assistant',
-            content: streamingMessage.content,
-            is_edited: false,
-            is_deleted: false,
-            is_pinned: false,
-            total_tokens: message.total_tokens,
-            generation_time: message.generation_time,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            timeline: streamingMessage.timeline  // ✅ 直接使用已构建的 timeline
-          };
+        if (currentSession) {
+          if (streamingMessage) {
+            // ✅ 有流式消息，正常保存
+            const finalMessage: ChatMessage = {
+              id: message.message_id,
+              session_id: currentSession.session_id || currentSession.id,
+              role: 'assistant',
+              content: streamingMessage.content,
+              is_edited: false,
+              is_deleted: false,
+              is_pinned: false,
+              total_tokens: message.total_tokens,
+              generation_time: message.generation_time,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              timeline: streamingMessage.timeline  // ✅ 直接使用已构建的 timeline
+            };
 
-          // ✅ 更新会话的上下文信息（从WS推送的数据）
-          const updatedSession = message.context_info ? {
-            ...currentSession,
-            current_context_tokens: message.context_info.current_context_tokens,
-            max_context_tokens: message.context_info.max_context_tokens,
-            context_usage_percent: (message.context_info.current_context_tokens / message.context_info.max_context_tokens) * 100
-          } : currentSession;
+            // ✅ 更新会话信息（上下文和消息数）
+            let updatedSession = { ...currentSession };
 
-          set((state) => ({
-            messages: [...state.messages, finalMessage],
-            streamingMessage: null,
-            status: 'connected',
-            currentSession: updatedSession
-          }));
+            // 更新上下文信息
+            if (message.context_info) {
+              updatedSession = {
+                ...updatedSession,
+                current_context_tokens: message.context_info.current_context_tokens,
+                max_context_tokens: message.context_info.max_context_tokens,
+                context_usage_percent: (message.context_info.current_context_tokens / message.context_info.max_context_tokens) * 100
+              };
+            }
+
+            // ✅ 更新消息数和 token 统计
+            if (message.session_info) {
+              updatedSession = {
+                ...updatedSession,
+                message_count: message.session_info.message_count,
+                total_tokens: message.session_info.total_tokens
+              };
+            }
+
+            set((state) => ({
+              messages: [...state.messages, finalMessage],
+              streamingMessage: null,
+              status: 'connected',
+              currentSession: updatedSession,
+              // ✅ 同时更新 sessions 列表中的对应会话
+              sessions: state.sessions.map((s) =>
+                (s.id === updatedSession.id || s.session_id === updatedSession.session_id)
+                  ? updatedSession
+                  : s
+              )
+            }));
+          } else {
+            // ✅ 没有流式消息（说明是切换回来的），重新加载消息
+            console.log('[WebSocket] 后台生成完成，重新加载消息');
+            const sessionId = currentSession.session_id || currentSession.id;
+            get().loadMessages(sessionId);
+
+            // ✅ 更新会话信息
+            if (message.session_info) {
+              set((state) => ({
+                currentSession: {
+                  ...state.currentSession!,
+                  message_count: message.session_info?.message_count || state.currentSession!.message_count,
+                  total_tokens: message.session_info?.total_tokens || state.currentSession!.total_tokens
+                },
+                sessions: state.sessions.map((s) =>
+                  (s.id === sessionId || s.session_id === sessionId)
+                    ? {
+                        ...s,
+                        message_count: message.session_info?.message_count || s.message_count,
+                        total_tokens: message.session_info?.total_tokens || s.total_tokens
+                      }
+                    : s
+                )
+              }));
+            }
+
+            set({ status: 'connected' });
+          }
         }
         break;
 
@@ -804,6 +918,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       case 'info':
         console.log('WebSocket info:', message.message);
+        break;
+
+      case 'session_title_updated':
+        // ✅ 处理会话标题更新
+        console.log('Session title updated:', message.session_id, message.title);
+        set((state) => {
+          const updatedSessions = state.sessions.map((s) =>
+            s.id === message.session_id || s.session_id === message.session_id
+              ? { ...s, title: message.title }
+              : s
+          );
+          const updatedCurrentSession = state.currentSession &&
+            (state.currentSession.id === message.session_id || state.currentSession.session_id === message.session_id)
+            ? { ...state.currentSession, title: message.title }
+            : state.currentSession;
+
+          return {
+            sessions: updatedSessions,
+            currentSession: updatedCurrentSession
+          };
+        });
         break;
     }
   },

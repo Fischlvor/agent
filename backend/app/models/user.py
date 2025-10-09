@@ -1,10 +1,9 @@
 """用户模型定义"""
 
 from typing import Any, Dict
-from uuid import uuid4
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON
 
 from app.models.base import BaseModel
 
@@ -14,7 +13,7 @@ class User(BaseModel):
 
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4, comment="用户唯一标识符")
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="用户主键ID")
     username = Column(String(50), unique=True, nullable=False, comment="用户名，用于登录")
     email = Column(String(100), unique=True, nullable=False, comment="用户邮箱，用于登录和通知")
     password_hash = Column(String(255), nullable=False, comment="密码哈希值")

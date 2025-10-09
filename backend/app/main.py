@@ -14,13 +14,15 @@ from app.middleware.rate_limit import RateLimitMiddleware
 # ============ 配置日志 ============
 # 配置根日志记录器，确保应用程序的日志也能输出
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # 临时改回INFO级别来调试工具问题
+    # level=logging.WARNING,  # 只显示WARNING及以上级别的日志
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
 # 确保应用程序模块的日志输出
-logging.getLogger("app").setLevel(logging.INFO)
+logging.getLogger("app").setLevel(logging.INFO)  # 临时改回INFO级别来调试工具问题
+# logging.getLogger("app").setLevel(logging.WARNING)  # 只显示WARNING及以上级别的日志
 
 # 创建FastAPI应用
 APP = FastAPI(

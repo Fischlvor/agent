@@ -3,7 +3,6 @@
 import logging
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -23,7 +22,6 @@ from app.schemas.chat import (
     SessionUpdate,
 )
 from app.services.chat_service import ChatService
-from app.core.redis_client import redis_service
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,7 +121,7 @@ def get_sessions(
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 def get_session(
-    session_id: UUID,
+    session_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -150,7 +148,7 @@ def get_session(
 
 @router.patch("/sessions/{session_id}", response_model=SessionResponse)
 def update_session(
-    session_id: UUID,
+    session_id: str,
     request: SessionUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
@@ -182,7 +180,7 @@ def update_session(
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_session(
-    session_id: UUID,
+    session_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -206,7 +204,7 @@ def delete_session(
 
 @router.post("/sessions/{session_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
-    session_id: UUID,
+    session_id: str,
     request: MessageCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -234,7 +232,8 @@ async def send_message(
         session_id=session_id,
         user=current_user,
         content=request.content,
-        model_id=request.model_id
+        model_id=request.model_id,
+        parent_message_id=request.parent_message_id
     )
 
     # 后台任务：生成AI响应并通过WebSocket推送
@@ -252,7 +251,7 @@ async def send_message(
 
 async def _generate_and_push_response(
     user_id: str,
-    session_id: UUID,
+    session_id: str,
     user: User,
     content: str,
     model_id: Optional[str] = None
@@ -266,8 +265,8 @@ async def _generate_and_push_response(
         content: 消息内容
         model_id: 模型ID
     """
-    from app.api.endpoints.chat_ws import manager
-    from app.db.session import SESSION_LOCAL
+    from app.api.endpoints.chat_ws import manager  # pylint: disable=import-outside-toplevel
+    from app.db.session import SESSION_LOCAL  # pylint: disable=import-outside-toplevel
 
     # 创建新的数据库会话（后台任务需要独立的会话）
     db = SESSION_LOCAL()
@@ -318,7 +317,7 @@ async def _generate_and_push_response(
 
 @router.get("/sessions/{session_id}/messages", response_model=MessageListResponse)
 def get_messages(
-    session_id: UUID,
+    session_id: str,
     limit: int = Query(50, ge=1, le=200, description="消息数量限制"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
@@ -342,14 +341,14 @@ def get_messages(
     )
 
 
-@router.patch("/messages/{message_id}", response_model=MessageResponse)
+@router.patch("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
 def edit_message(
-    message_id: UUID,
+    message_id: str,
     request: MessageUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """编辑消息（ChatGPT方式：删除后续所有回复）
+    """编辑消息（删除原消息及后续所有回复，前端需再调用 sendMessage 发送新内容）
 
     Args:
         message_id: 消息ID
@@ -358,25 +357,24 @@ def edit_message(
         current_user: 当前用户
 
     Returns:
-        编辑后的消息对象
+        204 No Content
     """
     chat_service = ChatService(db)
-    message = chat_service.edit_message(
+    success = chat_service.edit_message(
         message_id=message_id,
         user=current_user,
         new_content=request.content
     )
-    if not message:
+    if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="消息不存在或无权限"
         )
-    return message
 
 
 @router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_message(
-    message_id: UUID,
+    message_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):

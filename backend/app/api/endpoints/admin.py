@@ -1,7 +1,5 @@
 """管理员功能API端点"""
 
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -56,7 +54,7 @@ def get_users_list(
 
 @router.get("/users/{user_id}", response_model=UserResponse)
 def get_user_detail(
-    user_id: UUID,
+    user_id: int,
     current_admin: User = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
@@ -78,7 +76,7 @@ def get_user_detail(
 
 @router.put("/users/{user_id}", response_model=UserResponse)
 def update_user(
-    user_id: UUID,
+    user_id: int,
     request: AdminUserUpdate,
     current_admin: User = Depends(require_admin),
     db: Session = Depends(get_db)
@@ -121,7 +119,7 @@ def update_user(
 
 @router.delete("/users/{user_id}")
 def delete_user(
-    user_id: UUID,
+    user_id: int,
     current_admin: User = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
@@ -151,7 +149,7 @@ def delete_user(
 
 @router.put("/users/{user_id}/status", response_model=UserResponse)
 def update_user_status(
-    user_id: UUID,
+    user_id: int,
     request: UpdateUserStatusRequest,
     current_admin: User = Depends(require_admin),
     db: Session = Depends(get_db)

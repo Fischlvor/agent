@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -23,7 +22,7 @@ class SessionUpdate(SessionBase):
 
 class SessionResponse(SessionBase):
     """会话的响应Schema"""
-    id: UUID
+    id: int
     session_id: Optional[str] = None
     created_at: datetime
     last_activity_at: Optional[datetime] = None
