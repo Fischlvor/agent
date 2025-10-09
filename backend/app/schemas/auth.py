@@ -1,7 +1,6 @@
 """认证相关的Schema定义。"""
 
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, validator
 
@@ -26,7 +25,7 @@ class RegisterRequest(BaseModel):
 class RegisterResponse(BaseModel):
     """用户注册响应"""
     message: str = "注册成功，请查收验证邮件"
-    user_id: UUID
+    user_id: int
     email: str
 
 
@@ -97,7 +96,7 @@ class VerifyEmailRequest(BaseModel):
 class VerifyEmailResponse(BaseModel):
     """验证邮箱响应"""
     message: str = "邮箱验证成功"
-    user_id: UUID
+    user_id: int
 
 
 class ResendVerificationRequest(BaseModel):

@@ -5,6 +5,7 @@ ADK LLM 适配器
 """
 
 import logging
+from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from google.adk.models import BaseLlm
 from google.adk.models import LlmRequest, LlmResponse
@@ -56,7 +57,7 @@ class ADKLlmAdapter(BaseLlm):
         # ============ 步骤 1：转换请求格式 ============
         our_messages = self._convert_request_to_our_format(llm_request)
 
-        # 如果有历史消息，将其添加到请求前面
+        # 添加历史消息（从 agent_adapter 传来的完整历史）
         if hasattr(self, 'agent_adapter') and hasattr(self.agent_adapter, '_history_messages'):
             history = self.agent_adapter._history_messages
             if history:
@@ -79,6 +80,8 @@ class ADKLlmAdapter(BaseLlm):
 
         # 处理流式响应
         has_tool_call = False
+        llm_start_time = datetime.utcnow()  # 记录LLM调用开始时间
+
         async for chunk in response:
             # ✅ 提取 token 统计信息（最后一个 chunk 包含）
             if chunk.get("done") and ("prompt_eval_count" in chunk or "eval_count" in chunk):
@@ -89,6 +92,15 @@ class ADKLlmAdapter(BaseLlm):
                     prompt_token_count=prompt_count,
                     candidates_token_count=completion_count,
                     total_token_count=(prompt_count + completion_count)
+                )
+
+                # ✅ 保存 ModelInvocation 记录到数据库
+                self._save_model_invocation(
+                    prompt_tokens=prompt_count,
+                    completion_tokens=completion_count,
+                    total_tokens=prompt_count + completion_count,
+                    start_time=llm_start_time,
+                    finish_reason="STOP"
                 )
 
             # ✅ Ollama 流式响应格式：{"message": {"role": "assistant", "content": "..."}, "done": false}
@@ -379,6 +391,78 @@ class ADKLlmAdapter(BaseLlm):
         )
 
         return adk_response
+
+    def _save_model_invocation(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        start_time: datetime,
+        finish_reason: Optional[str] = None
+    ) -> None:
+        """
+        保存 ModelInvocation 记录到数据库
+
+        Args:
+            prompt_tokens: 输入token数
+            completion_tokens: 输出token数
+            total_tokens: 总token数
+            start_time: 开始时间
+            finish_reason: 完成原因
+        """
+        # 检查是否有必要的信息
+        if not hasattr(self, 'db_session') or not self.db_session:
+            LOGGER.debug("没有 db_session，跳过保存 ModelInvocation")
+            return
+
+        if not hasattr(self, 'current_message_id') or not self.current_message_id:
+            LOGGER.debug("没有 current_message_id，跳过保存 ModelInvocation")
+            return
+
+        if not hasattr(self, 'current_session_id') or not self.current_session_id:
+            LOGGER.debug("没有 current_session_id，跳过保存 ModelInvocation")
+            return
+
+        try:
+            # 导入 ModelInvocation（延迟导入避免循环依赖）
+            from app.models.invocation import ModelInvocation
+
+            # 递增序号
+            if not hasattr(self, 'llm_sequence_counter'):
+                object.__setattr__(self, 'llm_sequence_counter', 0)
+
+            current_sequence = self.llm_sequence_counter + 1
+            object.__setattr__(self, 'llm_sequence_counter', current_sequence)
+
+            # 计算耗时
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            # 创建记录
+            invocation = ModelInvocation(
+                message_id=str(self.current_message_id),
+                session_id=str(self.current_session_id),
+                sequence_number=current_sequence,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
+                model_name=self.model_name,
+                finish_reason=finish_reason,
+                created_at=datetime.utcnow()
+            )
+
+            # 保存到数据库
+            self.db_session.add(invocation)
+            self.db_session.flush()  # 立即写入，但不提交（由外层控制提交）
+
+            LOGGER.info(
+                f"✅ 已保存 ModelInvocation 记录 #{current_sequence}: "
+                f"tokens={total_tokens}, duration={duration_ms}ms"
+            )
+
+        except Exception as e:
+            LOGGER.error(f"保存 ModelInvocation 记录失败: {e}", exc_info=True)
+            # 不抛出异常，避免影响正常流程
 
     def connect(self):
         """

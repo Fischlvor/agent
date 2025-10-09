@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -20,7 +19,7 @@ class UserService:
 
     # ==================== 用户查询 ====================
 
-    def get_user_by_id(self, user_id: UUID) -> Optional[User]:
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
         """根据ID获取用户
 
         Args:
@@ -57,7 +56,7 @@ class UserService:
 
     def update_user(
         self,
-        user_id: UUID,
+        user_id: int,
         update_data: Dict[str, Any]
     ) -> Optional[User]:
         """更新用户信息
@@ -85,7 +84,7 @@ class UserService:
 
     def change_password(
         self,
-        user_id: UUID,
+        user_id: int,
         old_password: str,
         new_password: str
     ) -> Tuple[bool, Optional[str]]:
@@ -119,7 +118,7 @@ class UserService:
 
     def update_preferences(
         self,
-        user_id: UUID,
+        user_id: int,
         preferences: Dict[str, Any]
     ) -> Optional[User]:
         """更新用户偏好设置
@@ -143,7 +142,7 @@ class UserService:
 
     def delete_user(
         self,
-        user_id: UUID,
+        user_id: int,
         password: str,
         confirmation: str
     ) -> Tuple[bool, Optional[str]]:
@@ -237,7 +236,7 @@ class UserService:
 
     def admin_update_user(
         self,
-        user_id: UUID,
+        user_id: int,
         update_data: Dict[str, Any]
     ) -> Optional[User]:
         """管理员更新用户信息
@@ -263,8 +262,8 @@ class UserService:
         self.db.refresh(user)
         return user
 
-    def admin_delete_user(self, user_id: UUID) -> bool:
-        """管理员删除用户（硬删除）
+    def admin_delete_user(self, user_id: int) -> bool:
+        """管理员删除用户（软删除）
 
         Args:
             user_id: 用户ID
@@ -279,14 +278,15 @@ class UserService:
         # 删除该用户的所有refresh token
         redis_service.delete_user_refresh_tokens(str(user.id))
 
-        # 硬删除
-        self.db.delete(user)
+        # 软删除：设置为不活跃
+        user.is_active = False
+        user.updated_at = datetime.utcnow()
         self.db.commit()
         return True
 
     def update_user_status(
         self,
-        user_id: UUID,
+        user_id: int,
         is_active: bool
     ) -> Optional[User]:
         """更新用户激活状态

@@ -1,7 +1,6 @@
 """数据库基础模块，定义基础类和适配器接口。"""
 
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
-from uuid import UUID
 
 # type: ignore[attr-defined]
 from sqlalchemy import MetaData
@@ -42,7 +41,7 @@ class DatabaseAdapter(Generic[ModelType]):
         """
         self.database_session = db_session
 
-    def get(self, model: Type[ModelType], object_id: Union[UUID, str, int]) -> Optional[ModelType]:
+    def get(self, model: Type[ModelType], object_id: Union[str, int]) -> Optional[ModelType]:
         """通过ID获取单个对象
 
         Args:
@@ -130,7 +129,7 @@ class DatabaseAdapter(Generic[ModelType]):
     def delete(
             self,
             model: Type[ModelType],
-            object_id: Union[UUID, str, int]
+            object_id: Union[str, int]
     ) -> Optional[ModelType]:
         """删除对象
 

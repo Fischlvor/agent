@@ -1,7 +1,6 @@
 """认证中间件，提供JWT验证和权限检查。"""
 
 from typing import Optional
-from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -63,7 +62,7 @@ def get_current_user(
 
     # 查询用户
     try:
-        user_id = UUID(user_id_str)
+        user_id = int(user_id_str)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -196,7 +195,7 @@ async def get_current_user_ws(token: str, db: Session) -> User:
 
     # 查询用户
     try:
-        user_id = UUID(user_id_str)
+        user_id = int(user_id_str)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

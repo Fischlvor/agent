@@ -5,9 +5,9 @@ import logging
 import re
 from datetime import datetime
 from typing import AsyncIterator, Dict, List, Optional, Tuple, Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, or_
 from sqlalchemy.orm import Session
 
 #from app.ai.agent_service import AgentService
@@ -18,6 +18,7 @@ from app.core.prompts import DEFAULT_SYSTEM_PROMPT
 from app.core.redis_client import redis_service
 from app.models.ai_model import AIModel
 from app.models.chat import ChatMessage
+from app.models.invocation import ToolInvocation
 from app.models.session import ChatSession
 from app.models.user import User
 
@@ -169,7 +170,10 @@ class ChatService:
             (会话列表, 下一页游标, 是否还有更多)
         """
         query = self.db.query(ChatSession).filter(
-            ChatSession.user_id == user.id
+            and_(
+                ChatSession.user_id == user.id,
+                or_(ChatSession.status != 'deleted', ChatSession.status.is_(None))
+            )
         )
 
         if cursor:
@@ -188,7 +192,7 @@ class ChatService:
 
         return sessions, next_cursor, has_more
 
-    def get_session(self, session_id: UUID, user: User) -> Optional[ChatSession]:
+    def get_session(self, session_id: str, user: User) -> Optional[ChatSession]:
         """获取单个会话
 
         Args:
@@ -200,14 +204,15 @@ class ChatService:
         """
         return self.db.query(ChatSession).filter(
             and_(
-                ChatSession.id == session_id,
-                ChatSession.user_id == user.id
+                ChatSession.session_id == session_id,
+                ChatSession.user_id == user.id,
+                or_(ChatSession.status != 'deleted', ChatSession.status.is_(None))
             )
         ).first()
 
     def update_session(
         self,
-        session_id: UUID,
+        session_id: str,
         user: User,
         **kwargs
     ) -> Optional[ChatSession]:
@@ -233,8 +238,8 @@ class ChatService:
         self.db.refresh(session)
         return session
 
-    def delete_session(self, session_id: UUID, user: User) -> bool:
-        """删除会话
+    def delete_session(self, session_id: str, user: User) -> bool:
+        """删除会话（软删除）
 
         Args:
             session_id: 会话ID
@@ -247,7 +252,8 @@ class ChatService:
         if not session:
             return False
 
-        self.db.delete(session)
+        # 软删除：设置状态为 deleted
+        session.status = 'deleted'
         self.db.commit()
         return True
 
@@ -255,10 +261,11 @@ class ChatService:
 
     def create_user_message(
         self,
-        session_id: UUID,
+        session_id: str,
         user: User,
         content: str,
-        model_id: Optional[str] = None
+        model_id: Optional[str] = None,
+        parent_message_id: Optional[str] = None
     ) -> ChatMessage:
         """创建用户消息
 
@@ -267,6 +274,7 @@ class ChatService:
             user: 用户对象
             content: 消息内容
             model_id: 模型ID
+            parent_message_id: 父消息ID（用于编辑消息时的关联）
 
         Returns:
             创建的用户消息对象
@@ -278,11 +286,13 @@ class ChatService:
         # 创建用户消息
         user_message = ChatMessage(
             message_id=str(uuid4()),
-            session_id=session.id,
+            session_id=session.session_id,
+            parent_message_id=parent_message_id,
             role="user",
             content=content,
             message_type="text",
             status="completed",
+            is_edited=bool(parent_message_id),  # 如果有父消息，标记为已编辑
             model_name=model_id or session.ai_model,
             sent_at=datetime.utcnow()
         )
@@ -298,7 +308,7 @@ class ChatService:
 
     def get_messages(
         self,
-        session_id: UUID,
+        session_id: str,
         user: User,
         limit: int = 50
     ) -> List[ChatMessage]:
@@ -325,7 +335,7 @@ class ChatService:
 
     def create_message(
         self,
-        session_id: UUID,
+        session_id: str,
         role: str,
         content: str,
         **kwargs
@@ -356,7 +366,7 @@ class ChatService:
 
         # 更新会话的最后活动时间和消息计数
         session = self.db.query(ChatSession).filter(
-            ChatSession.id == session_id
+            ChatSession.session_id == session_id
         ).first()
         if session:
             session.last_activity_at = datetime.utcnow()
@@ -369,37 +379,37 @@ class ChatService:
 
     def edit_message(
         self,
-        message_id: UUID,
+        message_id: str,
         user: User,
-        new_content: str
-    ) -> Optional[ChatMessage]:
-        """编辑消息（创建新消息，处理摘要，软删除原消息及后续回复）
+        new_content: str  # pylint: disable=unused-argument
+    ) -> bool:
+        """编辑消息（软删除原消息及后续回复，不创建新消息）
 
         Args:
             message_id: 原消息ID
             user: 用户对象
-            new_content: 新内容
+            new_content: 新内容（保留用于API兼容性，实际由前端通过 sendMessage 重新发送）
 
         Returns:
-            新创建的消息对象
+            是否成功
         """
         original_message = self.db.query(ChatMessage).filter(
-            ChatMessage.id == message_id
+            ChatMessage.message_id == message_id
         ).first()
 
         if not original_message:
-            return None
+            return False
 
         # 检查权限
         session = self.db.query(ChatSession).filter(
             and_(
-                ChatSession.id == original_message.session_id,
+                ChatSession.session_id == original_message.session_id,
                 ChatSession.user_id == user.id
             )
         ).first()
 
         if not session:
-            return None
+            return False
 
         session_id = original_message.session_id
 
@@ -451,26 +461,7 @@ class ChatService:
             msg.is_deleted = True
             LOGGER.debug(f"🗑️ 软删除后续消息: {msg.id}")
 
-        # 5. 创建新消息（编辑后的内容）
-        now = datetime.utcnow()
-        new_message = ChatMessage(
-            message_id=str(uuid4()),
-            session_id=session_id,
-            parent_message_id=str(message_id),
-            role=original_message.role,
-            content=new_content,
-            message_type=original_message.message_type,
-            is_edited=True,
-            is_deleted=False,
-            is_summarized=False,  # 新消息不被摘要
-            created_at=now,
-            sent_at=now
-        )
-        self.db.add(new_message)
-        self.db.commit()
-        self.db.refresh(new_message)
-
-        # 6. 更新会话统计和上下文token
+        # 5. 更新会话统计和上下文token
         session.message_count = self.db.query(ChatMessage).filter(
             and_(
                 ChatMessage.session_id == session_id,
@@ -481,11 +472,11 @@ class ChatService:
         session.last_activity_at = datetime.utcnow()
         self.db.commit()
 
-        LOGGER.info(f"✅ 消息编辑完成: 新消息ID={new_message.id}, 上下文tokens={session.current_context_tokens}")
+        LOGGER.info(f"✅ 消息编辑完成: 已删除原消息和后续回复，等待前端发送新消息")
 
-        return new_message
+        return True
 
-    def delete_message(self, message_id: UUID, user: User) -> bool:
+    def delete_message(self, message_id: str, user: User) -> bool:
         """删除消息（软删除）
 
         Args:
@@ -496,7 +487,7 @@ class ChatService:
             是否成功删除
         """
         message = self.db.query(ChatMessage).filter(
-            ChatMessage.id == message_id
+            ChatMessage.message_id == message_id
         ).first()
 
         if not message:
@@ -505,7 +496,7 @@ class ChatService:
         # 检查权限
         session = self.db.query(ChatSession).filter(
             and_(
-                ChatSession.id == message.session_id,
+                ChatSession.session_id == message.session_id,
                 ChatSession.user_id == user.id
             )
         ).first()
@@ -568,7 +559,7 @@ class ChatService:
 
     def calculate_current_context_tokens(
         self,
-        session_id: UUID
+        session_id: str
     ) -> int:
         """计算当前上下文的token总数
 
@@ -600,7 +591,7 @@ class ChatService:
         # (prompt_tokens + completion_tokens)
         current_context = latest_message.total_tokens
 
-        LOGGER.debug(f"上下文Token: {current_context} (来自消息 {latest_message.id}: prompt={latest_message.prompt_tokens} + completion={latest_message.completion_tokens})")
+        LOGGER.debug(f"上下文Token: {current_context} (来自消息 {latest_message.message_id}: prompt={latest_message.prompt_tokens} + completion={latest_message.completion_tokens})")
 
         return current_context
 
@@ -608,7 +599,7 @@ class ChatService:
 
     async def generate_session_summary(
         self,
-        session_id: UUID,
+        session_id: str,
         user: User
     ) -> Optional[ChatMessage]:
         """生成会话摘要
@@ -721,12 +712,12 @@ class ChatService:
 
     async def send_message_streaming(
         self,
-        session_id: UUID,
+        session_id: str,
         user: User,
         content: str,
         model_id: Optional[str] = None,
         skip_user_message: bool = False,
-        edited_message_id: Optional[UUID] = None
+        edited_message_id: Optional[str] = None
     ) -> AsyncIterator[Dict]:
         """发送消息并流式返回AI回复
 
@@ -803,8 +794,23 @@ class ChatService:
                 message_type="text"
             )
 
-        # 生成助手消息ID（用于整个对话回合）
-        assistant_message_id = str(uuid4())
+        # ✅ 先创建一个pending状态的assistant消息占位符（用于外键约束）
+        assistant_message_placeholder = ChatMessage(
+            message_id=str(uuid4()),
+            session_id=session_id,
+            role="assistant",
+            content="",  # 空内容，稍后更新
+            message_type="text",
+            status="pending",  # 标记为pending
+            model_name=target_model_id,
+            sent_at=datetime.utcnow()
+        )
+        self.db.add(assistant_message_placeholder)
+        self.db.flush()  # 立即写入以获取ID，但不提交
+        assistant_message_id = assistant_message_placeholder.message_id
+
+        # ✅ 增加消息计数（创建助手消息）
+        session.message_count += 1
 
         # 发送开始消息
         event_id, current_event_type = self._get_next_event_id(
@@ -812,7 +818,7 @@ class ChatService:
         )
         yield self._wrap_ws_message(
             event_data={
-                "message_id": assistant_message_id,
+                "message_id": str(assistant_message_id),
                 "conversation_id": str(session_id),
                 "status": MessageStatus.PENDING,
                 "message_index": message_index
@@ -832,11 +838,13 @@ class ChatService:
             should_generate_summary = True
 
         # ✅ 步骤2：获取有效消息（未删除且未被摘要的）
+        # ⚠️ 排除刚创建的 pending 状态的助手占位符消息
         effective_messages = self.db.query(ChatMessage).filter(
             and_(
                 ChatMessage.session_id == session_id,
                 ChatMessage.is_deleted == False,
-                ChatMessage.is_summarized == False  # 不包含已被摘要的
+                ChatMessage.is_summarized == False,  # 不包含已被摘要的
+                ChatMessage.message_id != assistant_message_id  # ⚠️ 排除占位符
             )
         ).order_by(ChatMessage.created_at).all()
 
@@ -868,8 +876,6 @@ class ChatService:
                 messages.append({"role": msg.role, "content": msg.content})
             messages.append({"role": "user", "content": content})
 
-        LOGGER.info(f"📝 发送给LLM的消息数: {len(messages)}, 消息列表: {[(m['role'], len(m.get('content', ''))) for m in messages]}")
-
         # 创建AI客户端
         client = FACTORY.create_client(
             provider=model_config.provider,
@@ -880,6 +886,13 @@ class ChatService:
         # 创建Agent服务
         agent = AgentService(client, debug=False)
 
+        # ✅ 设置LLM适配器的追踪信息
+        if hasattr(agent, 'adk_llm') and agent.adk_llm:
+            object.__setattr__(agent.adk_llm, 'db_session', self.db)
+            object.__setattr__(agent.adk_llm, 'current_session_id', session_id)
+            object.__setattr__(agent.adk_llm, 'current_message_id', assistant_message_id)  # 这是UUID对象
+            object.__setattr__(agent.adk_llm, 'llm_sequence_counter', 0)
+
         # 流式生成
         assistant_content = ""
         has_sent_thinking = False  # ✅ 是否已发送 thinking
@@ -888,6 +901,11 @@ class ChatService:
         current_thinking_id = None  # ✅ 当前正在进行的 thinking 块的 ID
         timeline = []  # ✅ 记录事件时间线（thinking、tool_call、content）
         start_time = datetime.utcnow()
+
+        # ✅ 工具调用追踪
+        tool_sequence_counter = 0  # 工具调用序号
+        tool_invocation_records = {}  # {tool_call_id: ToolInvocation对象}
+        tool_start_times = {}  # {tool_call_id: start_time}
 
         # ✅ Token 统计信息
         prompt_tokens = 0
@@ -940,7 +958,7 @@ class ChatService:
                                 )
                                 yield self._wrap_ws_message(
                                     event_data={
-                                        "message_id": assistant_message_id,
+                                        "message_id": str(assistant_message_id),
                                         "conversation_id": str(session_id),
                                         "message": {
                                             "id": thinking_id,  # ✅ 现在使用流式时的 ID
@@ -980,7 +998,7 @@ class ChatService:
                                 )
                                 yield self._wrap_ws_message(
                                     event_data={
-                                        "message_id": assistant_message_id,
+                                        "message_id": str(assistant_message_id),
                                         "conversation_id": str(session_id),
                                         "message": {
                                             "id": content_id,
@@ -1004,8 +1022,8 @@ class ChatService:
                             )
                             yield self._wrap_ws_message(
                                 event_data={
-                                    "message_id": assistant_message_id,
-                                    "conversation_id": str(session_id),
+                        "message_id": str(assistant_message_id),
+                        "conversation_id": str(session_id),
                                     "message": {
                                         "id": current_thinking_id,
                                         "content_type": ContentType.THINKING,
@@ -1030,8 +1048,8 @@ class ChatService:
                             )
                             yield self._wrap_ws_message(
                                 event_data={
-                                    "message_id": assistant_message_id,
-                                    "conversation_id": str(session_id),
+                        "message_id": str(assistant_message_id),
+                        "conversation_id": str(session_id),
                                     "message": {
                                         "id": current_thinking_id,
                                         "content_type": ContentType.THINKING,
@@ -1057,7 +1075,7 @@ class ChatService:
                                 )
                                 yield self._wrap_ws_message(
                                     event_data={
-                                        "message_id": assistant_message_id,
+                                        "message_id": str(assistant_message_id),
                                         "conversation_id": str(session_id),
                                         "message": {
                                             "id": content_id,
@@ -1076,11 +1094,45 @@ class ChatService:
                 elif chunk["type"] == "tool_calls":
                     for tool_call in chunk.get("tool_calls", []):
                         tool_call_id = str(uuid4())
+                        tool_name = tool_call["function"]["name"]
+                        tool_args = tool_call["function"]["arguments"]
+                        tool_sequence_counter += 1
+                        tool_start_times[tool_call_id] = datetime.utcnow()
+
+                        # ✅ 创建工具调用记录（pending状态）
+                        try:
+                            # 获取当前LLM序号（如果有）
+                            current_llm_sequence = None
+                            if hasattr(agent, 'adk_llm') and hasattr(agent.adk_llm, 'llm_sequence_counter'):
+                                current_llm_sequence = agent.adk_llm.llm_sequence_counter
+
+                            tool_invocation = ToolInvocation(
+                                message_id=assistant_message_id,
+                                session_id=session_id,
+                                sequence_number=tool_sequence_counter,
+                                triggered_by_llm_sequence=current_llm_sequence,
+                                tool_name=tool_name,
+                                arguments=tool_args,
+                                result=None,
+                                status="pending",
+                                cache_hit=False,
+                                error_message=None,
+                                duration_ms=None,
+                                created_at=datetime.utcnow()
+                            )
+                            self.db.add(tool_invocation)
+                            self.db.flush()  # 获取ID但不提交
+                            tool_invocation_records[tool_call_id] = tool_invocation
+
+                            LOGGER.info(f"✅ 创建工具调用记录 #{tool_sequence_counter}: {tool_name}")
+                        except Exception as e:
+                            LOGGER.error(f"创建工具调用记录失败: {e}", exc_info=True)
+
                         # ✅ 添加到时间线
                         timeline.append({
                             "type": "tool_call",
-                            "tool_name": tool_call["function"]["name"],
-                            "tool_args": tool_call["function"]["arguments"],
+                            "tool_name": tool_name,
+                            "tool_args": tool_args,
                             "tool_id": tool_call_id,
                             "status": "pending",
                             "timestamp": datetime.utcnow().isoformat()
@@ -1090,14 +1142,14 @@ class ChatService:
                         )
                         yield self._wrap_ws_message(
                             event_data={
-                                "message_id": assistant_message_id,
-                                "conversation_id": str(session_id),
+                        "message_id": str(assistant_message_id),
+                        "conversation_id": str(session_id),
                                 "message": {
                                     "id": tool_call_id,
                                     "content_type": ContentType.TOOL_CALL,
                                     "content": json.dumps({
-                                        "name": tool_call["function"]["name"],
-                                        "args": tool_call["function"]["arguments"]
+                                        "name": tool_name,
+                                        "args": tool_args
                                     })
                                 },
                                 "status": MessageStatus.PENDING,
@@ -1116,6 +1168,36 @@ class ChatService:
                             event["result"] = chunk["result"]
                             event["status"] = "success"
                             tool_result_id = event.get("tool_id")
+
+                            # ✅ 更新数据库记录
+                            if tool_result_id and tool_result_id in tool_invocation_records:
+                                try:
+                                    invocation = tool_invocation_records[tool_result_id]
+                                    start_time_key = tool_result_id
+
+                                    # 计算耗时
+                                    duration_ms = None
+                                    if start_time_key in tool_start_times:
+                                        duration = (datetime.utcnow() - tool_start_times[start_time_key]).total_seconds()
+                                        duration_ms = int(duration * 1000)
+
+                                    # 更新记录
+                                    invocation.result = str(chunk["result"]) if chunk["result"] else None
+                                    invocation.status = "success"
+                                    invocation.duration_ms = duration_ms
+
+                                    # 检查是否命中缓存（从result中判断）
+                                    # TODO: 如果MCP返回缓存标志，在这里更新
+
+                                    self.db.flush()
+
+                                    LOGGER.info(
+                                        f"✅ 更新工具调用记录: {invocation.tool_name} "
+                                        f"status=success, duration={duration_ms}ms"
+                                    )
+                                except Exception as e:
+                                    LOGGER.error(f"更新工具调用记录失败: {e}", exc_info=True)
+
                             break
 
                     event_id, current_event_type = self._get_next_event_id(
@@ -1123,7 +1205,7 @@ class ChatService:
                     )
                     yield self._wrap_ws_message(
                         event_data={
-                            "message_id": assistant_message_id,
+                            "message_id": str(assistant_message_id),
                             "conversation_id": str(session_id),
                             "message": {
                                 "id": tool_result_id or str(uuid4()),
@@ -1141,8 +1223,48 @@ class ChatService:
                     )
                     message_index += 1
 
+                elif chunk["type"] == "llm_invocation":
+                    # ✅ LLM调用完成事件
+                    invocation_data = chunk.get("invocation_data", {})
+
+                    # 计算会话累积token (实时累加)
+                    current_call_tokens = invocation_data.get('total_tokens', 0)
+                    session.total_tokens = (session.total_tokens or 0) + current_call_tokens
+
+                    # 计算上下文使用百分比
+                    context_usage_percent = 0.0
+                    if model_max_context > 0:
+                        context_usage_percent = round((session.total_tokens / model_max_context) * 100, 2)
+
+                    # 推送LLM调用完成事件
+                    event_id, current_event_type = self._get_next_event_id(
+                        EventType.LLM_INVOCATION_COMPLETE, current_event_type, event_id
+                    )
+                    yield self._wrap_ws_message(
+                        event_data={
+                            "message_id": str(assistant_message_id),
+                            "conversation_id": str(session_id),
+                            "invocation": {
+                                "sequence": invocation_data.get('sequence'),
+                                "tokens": {
+                                    "prompt": invocation_data.get('prompt_tokens'),
+                                    "completion": invocation_data.get('completion_tokens'),
+                                    "total": invocation_data.get('total_tokens')
+                                },
+                                "duration_ms": invocation_data.get('duration_ms'),
+                                "finish_reason": invocation_data.get('finish_reason')
+                            },
+                            "session_cumulative_tokens": session.total_tokens,
+                            "context_usage_percent": context_usage_percent,
+                            "message_index": message_index
+                        },
+                        event_id=event_id,
+                        event_type=EventType.LLM_INVOCATION_COMPLETE
+                    )
+                    message_index += 1
+
                 elif chunk["type"] == "usage":
-                    # ✅ Token 统计信息
+                    # ✅ Token 统计信息（最终汇总，保留用于兼容）
                     usage = chunk.get("usage", {})
                     prompt_tokens = usage.get("prompt_tokens", 0)
                     completion_tokens = usage.get("completion_tokens", 0)
@@ -1164,24 +1286,25 @@ class ChatService:
                 "timeline": timeline  # 按时间顺序记录所有事件
             } if timeline else None
 
-            assistant_message = self.create_message(
-                session_id=session_id,
-                role="assistant",
-                content=assistant_content,
-                message_type="text",
-                model_name=target_model_id,
-                generation_time=generation_time,
-                structured_content=structured_content,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens
-            )
+            # ✅ 更新占位符消息（而不是创建新消息）
+            assistant_message_placeholder.content = assistant_content
+            assistant_message_placeholder.status = "completed"
+            assistant_message_placeholder.generation_time = generation_time
+            assistant_message_placeholder.structured_content = structured_content
+            assistant_message_placeholder.prompt_tokens = prompt_tokens
+            assistant_message_placeholder.completion_tokens = completion_tokens
+            assistant_message_placeholder.total_tokens = total_tokens
 
-            # ✅ 更新会话的 current_context_tokens
+            assistant_message = assistant_message_placeholder
+
+            # ✅ 更新会话的 current_context_tokens 和 total_tokens
             session.current_context_tokens = self.calculate_current_context_tokens(session_id)
+            # session.total_tokens 已经在每次LLM调用时累加了，这里不需要重复设置
+
+            # ✅ 一次性提交所有更改（消息、invocations、session）
             self.db.commit()
 
-            LOGGER.info(f"✅ 会话上下文更新: {session.current_context_tokens}/{model_max_context} tokens ({session.current_context_tokens/model_max_context*100:.1f}%)")
+            LOGGER.info(f"✅ 会话统计更新: current_context={session.current_context_tokens}/{model_max_context} tokens ({session.current_context_tokens/model_max_context*100:.1f}%), total_tokens={session.total_tokens}")
 
             # ✅ 清除会话摘要缓存（会话内容已更新）
             redis_service.delete_session_summary(str(session_id))
@@ -1192,7 +1315,7 @@ class ChatService:
             )
             yield self._wrap_ws_message(
                 event_data={
-                    "message_id": str(assistant_message.id),  # 使用真实的数据库ID
+                    "message_id": assistant_message.message_id,  # 使用业务ID
                     "conversation_id": str(session_id),
                     "status": MessageStatus.COMPLETED,
                     "is_finish": True,
@@ -1202,6 +1325,15 @@ class ChatService:
                     "context_info": {
                         "current_context_tokens": session.current_context_tokens,
                         "max_context_tokens": model_max_context
+                    },
+                    # ✅ 推送会话统计信息，用于更新会话列表显示
+                    "session_info": {
+                        "session_id": str(session_id),
+                        "message_count": session.message_count,  # ✅ 总消息数（包括用户和助手）
+                        "total_prompt_tokens": prompt_tokens,  # ✅ 当前对话的 prompt tokens
+                        "total_completion_tokens": completion_tokens,  # ✅ 当前对话的 completion tokens
+                        "total_tokens": session.total_tokens,  # ✅ 会话累计 tokens
+                        "last_activity_at": session.last_activity_at.isoformat() if session.last_activity_at else None
                     }
                 },
                 event_id=event_id,
@@ -1210,16 +1342,16 @@ class ChatService:
 
             # 如果是第一条消息，异步生成标题
             if session.message_count == 2:  # 用户消息 + AI回复
-                # ✅ 异步生成会话标题（不阻塞响应）
+                # ✅ 异步生成会话标题（不阻塞响应）并推送给前端
                 import asyncio
-                asyncio.create_task(self.generate_title(session_id))
+                asyncio.create_task(self.generate_title(session_id, str(user.id)))
 
         except Exception as e:
             LOGGER.exception("生成回复失败")
             yield self._wrap_ws_message(
                 event_data={
-                    "message_id": assistant_message_id,
-                    "conversation_id": str(session_id),
+                        "message_id": str(assistant_message_id),
+                        "conversation_id": str(session_id),
                     "message": {
                         "id": str(uuid4()),
                         "content_type": ContentType.ERROR,
@@ -1235,81 +1367,188 @@ class ChatService:
 
         # ✅ 不需要关闭 client，由 factory 统一管理连接池
 
-    async def generate_title(self, session_id: UUID) -> Optional[str]:
-        """异步生成会话标题
+    async def generate_title(self, session_id: str, user_id: Optional[str] = None) -> Optional[str]:
+        """异步生成会话标题（使用 LLM 总结）并推送给前端
 
         Args:
             session_id: 会话ID
+            user_id: 用户ID（用于WebSocket推送）
 
         Returns:
             生成的标题
         """
         try:
-            # ✅ 获取会话的前2条消息
+            # ✅ 获取会话信息
             session = self.db.query(ChatSession).filter(
-                ChatSession.id == session_id
+                ChatSession.session_id == session_id
             ).first()
 
             if not session:
                 return None
 
+            # ✅ 严格判断：只在第一轮对话（2条消息）时生成标题
+            # 这样即使用户修改了标题，也不会在后续对话中重复生成
+            if session.message_count != 2:
+                LOGGER.debug(f"会话 {session_id} 消息数为 {session.message_count}，跳过标题生成")
+                return None
+
+            # ✅ 获取前2条消息
             messages = self.db.query(ChatMessage).filter(
                 ChatMessage.session_id == session_id,
                 ChatMessage.is_deleted == False
             ).order_by(ChatMessage.sent_at.asc()).limit(2).all()
 
             if len(messages) < 2:
+                LOGGER.warning(f"会话 {session_id} 消息数不足，无法生成标题")
                 return None
 
             user_message = messages[0].content
             assistant_message = messages[1].content
 
-            # ✅ 生成标题策略：提取用户问题的关键部分
-            title = self._extract_title_from_message(user_message)
+            # ✅ 使用 LLM 生成标题（智能总结）
+            title = await self._generate_title_with_llm(user_message, assistant_message, session)
 
-            # 更新会话标题
-            if title and not session.title:  # 只在标题为空时更新
+            # ✅ 更新会话标题
+            if title:
+                old_title = session.title
                 session.title = title
                 self.db.commit()
-                LOGGER.info(f"会话 {session_id} 标题已生成: {title}")
+                LOGGER.info(f"✅ 会话 {session_id} 标题已生成: '{old_title}' → '{title}'")
+
+                # ✅ 通过 WebSocket 推送标题更新给前端
+                if user_id:
+                    await self._push_title_update(user_id, session_id, title)
+            else:
+                LOGGER.warning(f"⚠️  会话 {session_id} 标题生成为空，保持原标题")
 
             return title
 
         except Exception as e:
-            LOGGER.error(f"生成会话标题失败: {e}")
+            LOGGER.error(f"❌ 生成会话标题失败: {e}")
             self.db.rollback()
             return None
 
-    def _extract_title_from_message(self, message: str) -> str:
-        """从消息中提取标题
+    async def _push_title_update(self, user_id: str, session_id: str, title: str):
+        """通过 WebSocket 推送标题更新
 
         Args:
-            message: 用户消息
+            user_id: 用户ID
+            session_id: 会话ID
+            title: 新标题
+        """
+        try:
+            # 导入 WebSocket manager
+            from app.api.endpoints.chat_ws import manager
+            from app.constants import EventType
+
+            # 构建标题更新事件（使用 conversation_id 以保持与其他事件一致）
+            event_data = {
+                "conversation_id": session_id,  # ✅ 使用 conversation_id 保持一致
+                "title": title,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+
+            # 推送给前端
+            await manager.send_message(user_id, {
+                "event_data": json.dumps(event_data, ensure_ascii=False),
+                "event_id": "0",
+                "event_type": EventType.SESSION_TITLE_UPDATED
+            })
+
+            LOGGER.info(f"✅ 已推送标题更新到用户 {user_id}: {title}")
+
+        except Exception as e:
+            # WebSocket 推送失败不应该影响标题生成
+            LOGGER.warning(f"⚠️  推送标题更新失败: {e}")
+
+    async def _generate_title_with_llm(
+        self,
+        user_message: str,
+        assistant_message: str,
+        session: ChatSession
+    ) -> str:
+        """使用 LLM 生成会话标题
+
+        Args:
+            user_message: 用户消息
+            assistant_message: 助手回复
+            session: 会话对象
 
         Returns:
-            提取的标题
+            生成的标题
         """
-        # 移除多余空格和换行
-        message = message.strip().replace('\n', ' ')
+        # 构建标题生成提示词
+        title_prompt = f"""请根据以下对话内容，生成一个简洁明了的标题（8-15字以内，不要使用标点符号）。
 
-        # 如果消息很短，直接返回
-        if len(message) <= 15:
-            return message
+用户问题：{user_message}
+AI回复：{assistant_message}...
 
-        # 如果是问句，提取问题核心
-        question_patterns = [
-            ('什么是', lambda m: m.split('什么是')[1][:15] if '什么是' in m else None),
-            ('如何', lambda m: '如何' + m.split('如何')[1][:12] if '如何' in m else None),
-            ('怎么', lambda m: '怎么' + m.split('怎么')[1][:12] if '怎么' in m else None),
-            ('为什么', lambda m: '为什么' + m.split('为什么')[1][:10] if '为什么' in m else None),
-        ]
+要求：
+1. 提取对话的核心主题
+2. 使用简洁的短语或问句形式
+3. 8-15个字以内
+4. 不要加引号或其他标点
+5. 直接返回标题文本，不要其他内容
 
-        for pattern, extractor in question_patterns:
-            if pattern in message:
-                title = extractor(message)
-                if title:
-                    return title.strip()
+标题："""
 
-        # 默认：截取前20个字
-        return message[:20].strip() + ('...' if len(message) > 20 else '')
+        # 获取模型配置
+        model_config = self.get_model_by_id(session.ai_model or "qwen3:8b")
+        if not model_config:
+            # 降级：如果模型不可用，返回通用标题
+            LOGGER.warning(f"模型配置不存在，使用默认标题")
+            return "对话记录"
+
+        # 创建 LLM 客户端
+        client = FACTORY.create_client(
+            provider=model_config.provider,
+            model_name=model_config.model_id,
+            base_url=model_config.base_url
+        )
+
+        try:
+            # 非流式调用生成标题
+            response = await client.chat(
+                messages=[{"role": "user", "content": title_prompt}],
+                stream=False
+            )
+
+            # 提取标题内容
+            title = response.get("content", "").strip()
+
+            # 移除思考标签（如果LLM返回了）
+            if '<think>' in title:
+                title = title.split('</think>')[-1].strip()
+
+            # 清理可能的引号、标点等（首尾）
+            title = title.strip('"\'「」《》『』【】""''。，！？、;：')
+
+            # 如果LLM返回了多行，只取第一行
+            if '\n' in title:
+                title = title.split('\n')[0].strip()
+
+            # 移除可能的"标题："前缀
+            if title.startswith('标题：') or title.startswith('标题:'):
+                title = title[3:].strip()
+
+            # 如果标题为空或太短，使用通用标题
+            if not title or len(title) < 2:
+                LOGGER.warning(f"LLM 返回的标题为空或太短: '{title}'，使用通用标题")
+                return "对话记录"
+
+            # 如果标题过长（超过30字），说明LLM没有遵守指令，重新生成
+            if len(title) > 30:
+                LOGGER.warning(f"LLM 生成的标题过长({len(title)}字): '{title}'，使用通用标题")
+                return "对话记录"
+
+            LOGGER.info(f"✅ LLM 生成标题: {title}")
+            return title
+
+        except Exception as e:
+            LOGGER.error(f"❌ LLM 生成标题失败: {e}")
+            # 降级：返回通用标题，而不是截取用户消息
+            return "对话记录"
+        finally:
+            await client.close()
+
 

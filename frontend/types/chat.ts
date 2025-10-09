@@ -45,6 +45,8 @@ export interface ChatSession {
   current_context_tokens?: number;
   max_context_tokens?: number;
   context_usage_percent?: number;
+  // 未读消息标记
+  hasNewMessage?: boolean;
 }
 
 export interface CreateSessionRequest {
@@ -181,11 +183,13 @@ export type WSMessageType =
   | 'tool_result'
   | 'content'
   | 'done'
+  | 'session_title_updated'
   | 'error'
   | 'info';
 
 export interface WSBaseMessage {
   type: WSMessageType;
+  session_id?: string;  // 会话ID，用于验证消息归属
 }
 
 export interface WSConnectedMessage extends WSBaseMessage {
@@ -292,6 +296,13 @@ export interface WSDoneMessage extends WSBaseMessage {
     current_context_tokens: number;
     max_context_tokens: number;
   };
+  session_info?: {
+    session_id: string;
+    message_count: number;
+    total_prompt_tokens: number;
+    total_completion_tokens: number;
+    total_tokens: number;
+  };
 }
 
 export interface WSErrorMessage extends WSBaseMessage {
@@ -304,6 +315,14 @@ export interface WSErrorMessage extends WSBaseMessage {
 export interface WSInfoMessage extends WSBaseMessage {
   type: 'info';
   message: string;
+}
+
+export interface WSSessionTitleUpdatedMessage extends WSBaseMessage {
+  type: 'session_title_updated';
+  session_id: string;
+  title: string;
+  event_id: number;
+  event_type: number;
 }
 
 export type WSMessage =
@@ -319,6 +338,7 @@ export type WSMessage =
   | WSToolResultMessage
   | WSContentMessage
   | WSDoneMessage
+  | WSSessionTitleUpdatedMessage  // ✅ 会话标题更新
   | WSErrorMessage
   | WSInfoMessage;
 
@@ -333,6 +353,7 @@ export interface ToolCall {
 
 export interface StreamingMessage {
   id: string;
+  session_id: string;  // ✅ 所属会话ID
   role: 'assistant';
   content: string;
   isStreaming: boolean;
