@@ -12,6 +12,8 @@ from app.models.base import Base
 from app.models.user import User
 from app.models.session import ChatSession
 from app.models.chat import ChatMessage
+from app.models.ai_model import AIModel
+from app.models.invocation import ModelInvocation, ToolInvocation
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

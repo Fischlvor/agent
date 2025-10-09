@@ -198,31 +198,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   selectSession: async (sessionId: string) => {
     try {
-      // ✅ 先保存流式消息状态（防止被loadMessages清除）
-      const { streamingMessage: currentStreaming } = get();
-      const streamingBelongsToThisSession = currentStreaming &&
-        currentStreaming.session_id === sessionId;
+      // ✅ 先保存流式消息状态（不清空，保留在后台）
+      const { streamingMessage: currentStreaming, status: currentStatus } = get();
 
       if (currentStreaming) {
-        console.log(`[切换会话] 流式消息会话ID: ${currentStreaming.session_id}, 目标会话ID: ${sessionId}, 是否匹配: ${streamingBelongsToThisSession}`);
+        console.log(`[切换会话] 流式消息会话ID: ${currentStreaming.session_id}, 目标会话ID: ${sessionId}`);
       }
 
       const session = await apiClient.getSession(sessionId);
       set({ currentSession: session });
       await get().loadMessages(sessionId);
 
-      // ✅ 根据之前保存的状态恢复或清除流式消息
-      if (streamingBelongsToThisSession && currentStreaming) {
-        // 流式消息属于当前会话，恢复显示
-        set({
-          streamingMessage: currentStreaming,  // 恢复流式消息
-          status: 'generating'
-        });
+      // ✅ 检查流式消息是否属于目标会话
+      const streamingBelongsToTargetSession = currentStreaming &&
+        currentStreaming.session_id === sessionId;
+
+      if (streamingBelongsToTargetSession) {
+        // 流式消息属于当前会话，恢复显示（状态已存在，无需重新设置）
         console.log('[WebSocket] ✅ 恢复流式显示:', currentStreaming.id);
-      } else if (currentStreaming) {
-        // 流式消息属于其他会话，清空
-        set({ streamingMessage: null, status: 'connected' });
-        console.log('[WebSocket] ⏸️ 隐藏其他会话的流式消息');
+      } else {
+        // 流式消息属于其他会话，不清空，只是更新状态为connected
+        // 这样切回原会话时仍能看到流式传输
+        set({ status: 'connected' });
+        console.log('[WebSocket] ⏸️ 暂时隐藏其他会话的流式消息（保留在后台）');
       }
 
       // ✅ 清除该会话的未读标记
@@ -587,15 +585,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (message.session_id && currentSession) {
       const currentSessionId = currentSession.session_id || currentSession.id;
       if (message.session_id !== currentSessionId) {
-        // ✅ 如果是 MESSAGE_DONE，标记该会话有新消息
+        // ✅ 如果是 MESSAGE_DONE，标记该会话有新消息并更新消息数
         if (message.type === 'done') {
           console.log(`[WebSocket] 后台会话完成: ${message.session_id}`);
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              (s.id === message.session_id || s.session_id === message.session_id)
-                ? { ...s, hasNewMessage: true }
-                : s
-            )
+            sessions: state.sessions.map((s) => {
+              if (s.id === message.session_id || s.session_id === message.session_id) {
+                // ✅ 更新消息数和token统计
+                return {
+                  ...s,
+                  hasNewMessage: true,
+                  message_count: message.session_info?.message_count ?? s.message_count,
+                  total_tokens: message.session_info?.total_tokens ?? s.total_tokens,
+                  current_context_tokens: message.context_info?.current_context_tokens ?? s.current_context_tokens,
+                  max_context_tokens: message.context_info?.max_context_tokens ?? s.max_context_tokens
+                };
+              }
+              return s;
+            })
           }));
         }
         return;  // 忽略不属于当前会话的其他消息

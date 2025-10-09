@@ -159,9 +159,11 @@ def get_db_adapter(db_type: str, db_session: Session) -> DatabaseAdapter:
         数据库适配器实例
     """
     # 导入放在函数内部，避免循环导入
+    from app.db.mysql import MySQLAdapter  # pylint: disable=import-outside-toplevel
     from app.db.postgresql import PostgreSQLAdapter  # pylint: disable=import-outside-toplevel
 
     adapters = {
+        "mysql": MySQLAdapter,
         "postgresql": PostgreSQLAdapter,
         # 可以添加其他数据库类型
         # "mysql": MySQLAdapter,

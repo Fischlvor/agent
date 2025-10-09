@@ -81,6 +81,7 @@ class ADKLlmAdapter(BaseLlm):
         # 处理流式响应
         has_tool_call = False
         llm_start_time = datetime.utcnow()  # 记录LLM调用开始时间
+        collected_tool_calls = None  # 收集 tool_calls，在流结束后处理
 
         async for chunk in response:
             # ✅ 提取 token 统计信息（最后一个 chunk 包含）
@@ -94,14 +95,17 @@ class ADKLlmAdapter(BaseLlm):
                     total_token_count=(prompt_count + completion_count)
                 )
 
-                # ✅ 保存 ModelInvocation 记录到数据库
-                self._save_model_invocation(
+                # ✅ 保存 ModelInvocation 记录到数据库，并获取序号
+                llm_sequence = self._save_model_invocation(
                     prompt_tokens=prompt_count,
                     completion_tokens=completion_count,
                     total_tokens=prompt_count + completion_count,
                     start_time=llm_start_time,
                     finish_reason="STOP"
                 )
+                # 保存最近的 LLM 序号，供工具调用使用
+                if llm_sequence is not None:
+                    object.__setattr__(self, 'last_llm_sequence', llm_sequence)
 
             # ✅ Ollama 流式响应格式：{"message": {"role": "assistant", "content": "..."}, "done": false}
             if "message" in chunk:
@@ -116,41 +120,43 @@ class ADKLlmAdapter(BaseLlm):
                     adk_response = self._create_streaming_response(delta)
                     yield adk_response
 
-                # ✅ 处理工具调用
+                # ✅ 收集工具调用（不立即yield，等done时再处理）
                 if "tool_calls" in message and message["tool_calls"]:
                     has_tool_call = True
-                    # 转换工具调用为 ADK 格式
-                    function_calls = []
-                    for tool_call in message["tool_calls"]:
-                        # Ollama 格式: {"function": {"name": "...", "arguments": {...}}}
-                        function_info = tool_call.get("function", {})
-                        tool_name = function_info.get("name", "")
+                    collected_tool_calls = message["tool_calls"]
 
-                        function_call = FunctionCall(
-                            name=tool_name,
-                            args=function_info.get("arguments", {})
-                        )
-                        function_calls.append(function_call)
+        # ✅ 流式结束后处理工具调用（此时 last_llm_sequence 已设置）
+        if has_tool_call and collected_tool_calls:
+            # 转换工具调用为 ADK 格式
+            function_calls = []
+            for tool_call in collected_tool_calls:
+                # Ollama 格式: {"function": {"name": "...", "arguments": {...}}}
+                function_info = tool_call.get("function", {})
+                tool_name = function_info.get("name", "")
 
-                    # 创建包含工具调用的响应
-                    if function_calls:
-                        # ✅ 工具调用时，只返回工具调用，不包含思考内容
-                        # 因为思考内容已经在前面的 chunks 中发送了
-                        parts = []
-                        for fc in function_calls:
-                            parts.append(Part(function_call=fc))
+                function_call = FunctionCall(
+                    name=tool_name,
+                    args=function_info.get("arguments", {})
+                )
+                function_calls.append(function_call)
 
-                        response_content = Content(role="model", parts=parts)
-                        adk_response = LlmResponse(
-                            content=response_content,
-                            turn_complete=True,  # 工具调用表示一轮完成
-                            finish_reason="STOP",  # ✅ ADK 通过 parts 中的 FunctionCall 判断工具调用
-                            usage_metadata=usage_metadata  # ✅ 添加 token 统计
-                        )
-                        yield adk_response
+            # 创建包含工具调用的响应
+            if function_calls:
+                parts = []
+                for fc in function_calls:
+                    parts.append(Part(function_call=fc))
+
+                response_content = Content(role="model", parts=parts)
+                adk_response = LlmResponse(
+                    content=response_content,
+                    turn_complete=True,  # 工具调用表示一轮完成
+                    finish_reason="STOP",
+                    usage_metadata=usage_metadata  # ✅ 添加 token 统计
+                )
+                yield adk_response
 
         # ✅ 流式结束：如果没有工具调用，返回一个完成标记（包含 usage_metadata）
-        if accumulated_content and not has_tool_call:
+        elif accumulated_content and not has_tool_call:
             final_response = LlmResponse(
                 content=Content(role="model", parts=[Part(text="")]),  # 空内容，仅作为结束标记
                 turn_complete=True,
@@ -399,7 +405,7 @@ class ADKLlmAdapter(BaseLlm):
         total_tokens: int,
         start_time: datetime,
         finish_reason: Optional[str] = None
-    ) -> None:
+    ) -> Optional[int]:
         """
         保存 ModelInvocation 记录到数据库
 
@@ -409,19 +415,22 @@ class ADKLlmAdapter(BaseLlm):
             total_tokens: 总token数
             start_time: 开始时间
             finish_reason: 完成原因
+
+        Returns:
+            保存的序号，如果保存失败则返回 None
         """
         # 检查是否有必要的信息
         if not hasattr(self, 'db_session') or not self.db_session:
             LOGGER.debug("没有 db_session，跳过保存 ModelInvocation")
-            return
+            return None
 
         if not hasattr(self, 'current_message_id') or not self.current_message_id:
             LOGGER.debug("没有 current_message_id，跳过保存 ModelInvocation")
-            return
+            return None
 
         if not hasattr(self, 'current_session_id') or not self.current_session_id:
             LOGGER.debug("没有 current_session_id，跳过保存 ModelInvocation")
-            return
+            return None
 
         try:
             # 导入 ModelInvocation（延迟导入避免循环依赖）
@@ -460,9 +469,12 @@ class ADKLlmAdapter(BaseLlm):
                 f"tokens={total_tokens}, duration={duration_ms}ms"
             )
 
+            return current_sequence
+
         except Exception as e:
             LOGGER.error(f"保存 ModelInvocation 记录失败: {e}", exc_info=True)
             # 不抛出异常，避免影响正常流程
+            return None
 
     def connect(self):
         """
