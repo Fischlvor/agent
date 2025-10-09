@@ -2,8 +2,7 @@
 
 from typing import Any, Dict
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
 
 from app.models.base import BaseModel
 

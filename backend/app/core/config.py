@@ -56,45 +56,81 @@ class Settings(BaseSettings):
     @property
     def database_type(self) -> str:
         """数据库类型。"""
-        return self._config_data.get("database", {}).get("type", "postgresql")
+        return self._config_data.get("database", {}).get("type", "mysql")
 
+    # MySQL配置
     @property
-    def postgres_server(self) -> str:
-        """PostgreSQL服务器地址。"""
+    def mysql_host(self) -> str:
+        """MySQL服务器地址。"""
         return (self._config_data.get("database", {})
-                .get("postgres", {}).get("server", "localhost"))
+                .get("mysql", {}).get("host", "localhost"))
 
     @property
-    def postgres_user(self) -> str:
-        """PostgreSQL用户名。"""
-        return (self._config_data.get("database", {})
-                .get("postgres", {}).get("user", "postgres"))
-
-    @property
-    def postgres_password(self) -> str:
-        """PostgreSQL密码。"""
-        return (self._config_data.get("database", {})
-                .get("postgres", {}).get("password", "postgres"))
-
-    @property
-    def postgres_db(self) -> str:
-        """PostgreSQL数据库名。"""
-        return (self._config_data.get("database", {})
-                .get("postgres", {}).get("db", "agent_db"))
-
-    @property
-    def postgres_port(self) -> str:
-        """PostgreSQL端口。"""
-        return str(
+    def mysql_port(self) -> int:
+        """MySQL端口。"""
+        return int(
             self._config_data.get("database", {})
-            .get("postgres", {}).get("port", 5432))
+            .get("mysql", {}).get("port", 3306))
+
+    @property
+    def mysql_username(self) -> str:
+        """MySQL用户名。"""
+        return (self._config_data.get("database", {})
+                .get("mysql", {}).get("username", "root"))
+
+    @property
+    def mysql_password(self) -> str:
+        """MySQL密码。"""
+        return (self._config_data.get("database", {})
+                .get("mysql", {}).get("password", ""))
+
+    @property
+    def mysql_db_name(self) -> str:
+        """MySQL数据库名。"""
+        return (self._config_data.get("database", {})
+                .get("mysql", {}).get("db_name", "agent"))
+
+    @property
+    def mysql_charset(self) -> str:
+        """MySQL字符集。"""
+        return (self._config_data.get("database", {})
+                .get("mysql", {}).get("charset", "utf8mb4"))
+
+    @property
+    def mysql_max_idle_conns(self) -> int:
+        """MySQL最大空闲连接数。"""
+        return int(
+            self._config_data.get("database", {})
+            .get("mysql", {}).get("max_idle_conns", 10))
+
+    @property
+    def mysql_max_open_conns(self) -> int:
+        """MySQL最大打开连接数。"""
+        return int(
+            self._config_data.get("database", {})
+            .get("mysql", {}).get("max_open_conns", 100))
+
+    @property
+    def mysql_log_mode(self) -> str:
+        """MySQL日志模式。"""
+        return (self._config_data.get("database", {})
+                .get("mysql", {}).get("log_mode", "info"))
 
     @property
     def database_uri(self) -> Optional[str]:
         """构建数据库URI。"""
-        if self.database_type == "postgresql":
-            return (f"postgresql://{self.postgres_user}:{self.postgres_password}"
-                    f"@{self.postgres_server}:{self.postgres_port}/{self.postgres_db}")
+        if self.database_type == "mysql":
+            return (f"mysql+pymysql://{self.mysql_username}:{self.mysql_password}"
+                    f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_db_name}"
+                    f"?charset={self.mysql_charset}")
+        elif self.database_type == "postgresql":
+            # 保留 PostgreSQL 支持（如需要）
+            postgres_config = self._config_data.get("database", {}).get("postgres", {})
+            if postgres_config:
+                return (f"postgresql://{postgres_config.get('user', 'postgres')}:"
+                        f"{postgres_config.get('password', 'postgres')}"
+                        f"@{postgres_config.get('server', 'localhost')}:"
+                        f"{postgres_config.get('port', 5432)}/{postgres_config.get('db', 'agent_db')}")
         # 可以在这里添加其他数据库类型的支持
         return None
 

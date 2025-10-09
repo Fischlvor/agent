@@ -8,10 +8,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -74,7 +74,7 @@ class ToolInvocation(Base):
     sequence_number = Column(Integer, nullable=False, comment="第几次工具调用")
     triggered_by_llm_sequence = Column(Integer, nullable=True, comment="由第几次LLM调用触发")
     tool_name = Column(String(100), nullable=False, comment="工具名称")
-    arguments = Column(JSONB, nullable=True, comment="输入参数")
+    arguments = Column(JSON, nullable=True, comment="输入参数")
     result = Column(Text, nullable=True, comment="执行结果")
     status = Column(String(20), nullable=False, comment="执行状态")
     cache_hit = Column(Boolean, nullable=False, default=False, comment="是否命中缓存")
