@@ -14,7 +14,7 @@ interface MessageItemProps {
 }
 
 export default function MessageItem({ message }: MessageItemProps) {
-  const { editMessageAndRegenerate, deleteMessage } = useChatStore();
+  const { editMessageAndRegenerate } = useChatStore();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content || '');
   const [showActions, setShowActions] = useState(false);
@@ -28,7 +28,7 @@ export default function MessageItem({ message }: MessageItemProps) {
     const trimmedContent = editContent.trim();
     if (trimmedContent && trimmedContent !== message.content) {
       // ✅ 编辑消息并重新生成回复（不会创建重复的用户消息）
-      await editMessageAndRegenerate(message.id, trimmedContent);
+      await editMessageAndRegenerate(message.message_id || message.id, trimmedContent);
     }
     setIsEditing(false);
   };
@@ -36,12 +36,6 @@ export default function MessageItem({ message }: MessageItemProps) {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditContent(message.content || '');
-  };
-
-  const handleDelete = async () => {
-    if (confirm('确定要删除这条消息吗？这将删除该消息之后的所有回复。')) {
-      await deleteMessage(message.id);
-    }
   };
 
   const handleCopy = () => {
@@ -299,12 +293,6 @@ export default function MessageItem({ message }: MessageItemProps) {
                       编辑
                     </button>
                   )}
-                  <button
-                    onClick={handleDelete}
-                    className="text-xs text-red-600 hover:text-red-700 transition-colors"
-                  >
-                    删除
-                  </button>
                 </>
               )}
             </div>

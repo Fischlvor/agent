@@ -285,20 +285,20 @@ class ApiClient {
    * 发送消息（HTTP POST）
    * 响应会通过 WebSocket 流式推送
    */
-  async sendMessage(sessionId: string, content: string, modelId?: string): Promise<ChatMessage> {
+  async sendMessage(sessionId: string, content: string, modelId?: string, parentMessageId?: string): Promise<ChatMessage> {
     const response = await this.client.post<ChatMessage>(
       `/chat/sessions/${sessionId}/messages`,
       {
         content,
-        model_id: modelId
+        model_id: modelId,
+        parent_message_id: parentMessageId
       }
     );
     return response.data;
   }
 
-  async updateMessage(messageId: string, data: UpdateMessageRequest): Promise<ChatMessage> {
-    const response = await this.client.patch<ChatMessage>(`/chat/messages/${messageId}`, data);
-    return response.data;
+  async updateMessage(messageId: string, data: UpdateMessageRequest): Promise<void> {
+    await this.client.patch(`/chat/messages/${messageId}`, data);
   }
 
   async deleteMessage(messageId: string): Promise<void> {

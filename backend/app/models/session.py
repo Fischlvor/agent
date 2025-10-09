@@ -1,11 +1,10 @@
 """会话模型定义"""
 
 from typing import Any, Dict, List, TYPE_CHECKING
-from uuid import uuid4
 
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
                         String, Text)
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -19,17 +18,18 @@ class ChatSession(BaseModel):
 
     __tablename__ = "chat_sessions"
 
-    id = Column(UUID(as_uuid=True),
+    id = Column(Integer,
                 primary_key=True,
-                default=uuid4,
-                comment="会话唯一标识符")
-    session_id = Column(String,
+                autoincrement=True,
+                comment="会话主键ID")
+    session_id = Column(String(36),
                         unique=True,
-                        nullable=True,
-                        comment="会话外部ID，用于API引用")
+                        nullable=False,
+                        comment="会话业务ID(UUID字符串)")
     user_id = Column(
-        UUID(as_uuid=True),
+        Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
         comment="关联的用户ID",
     )
     title = Column(String(200), nullable=True, comment="会话标题")

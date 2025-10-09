@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Optional, Tuple
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -122,7 +121,7 @@ class AuthService:
             raise ValueError("验证链接无效或已过期")
 
         # 查找用户
-        user = self.db.query(User).filter(User.id == UUID(user_id)).first()
+        user = self.db.query(User).filter(User.id == int(user_id)).first()
         if not user:
             raise ValueError("用户不存在")
 
@@ -327,7 +326,7 @@ class AuthService:
             raise ValueError("Refresh token无效或已过期")
 
         # 查找用户
-        user = self.db.query(User).filter(User.id == UUID(user_id)).first()
+        user = self.db.query(User).filter(User.id == int(user_id)).first()
         if not user:
             raise ValueError("用户不存在")
 
@@ -412,7 +411,7 @@ class AuthService:
             raise ValueError("重置链接无效或已过期")
 
         # 查找用户
-        user = self.db.query(User).filter(User.id == UUID(user_id)).first()
+        user = self.db.query(User).filter(User.id == int(user_id)).first()
         if not user:
             raise ValueError("用户不存在")
 
@@ -428,7 +427,7 @@ class AuthService:
 
     # ==================== 用户查询 ====================
 
-    def get_user_by_id(self, user_id: UUID) -> Optional[User]:
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
         """根据ID获取用户
 
         Args:

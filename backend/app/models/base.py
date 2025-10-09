@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any, Dict
-from uuid import UUID
 
 from sqlalchemy import Column, DateTime, func
 from sqlalchemy.ext.declarative import declared_attr
@@ -33,8 +32,6 @@ class BaseModel(Base):
             value = getattr(self, column.name)
             if isinstance(value, datetime):
                 value = value.isoformat()
-            elif isinstance(value, UUID):
-                value = str(value)
             result[column.name] = value
         return result
 

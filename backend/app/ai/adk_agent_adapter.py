@@ -132,11 +132,14 @@ class ADKAgentAdapter:
         self.adk_agent = _GLOBAL_AGENT_CACHE[cache_key]
         self.adk_runner = _GLOBAL_RUNNER_CACHE[cache_key]
 
+        # ✅ 更新 adk_llm 的引用（确保能访问最新的 _history_messages）
+        self.adk_llm.agent_adapter = self
+
         # ============ 步骤 2：准备 Runner 参数 ============
         adk_user_id = user_id or "default_user"
         adk_session_id = session_id or str(uuid.uuid4())
 
-        # 将所有消息（除最后一条）保存为历史，供 LLM adapter 使用
+        # 保存历史消息（除最后一条），供 LLM adapter 使用
         self._history_messages = messages[:-1] if len(messages) > 1 else []
 
         # 将最后一条消息转换为 Content 对象（作为新消息）
