@@ -705,8 +705,7 @@ class ChatService:
         except Exception as e:
             LOGGER.error(f"生成摘要失败: {e}")
             return None
-        finally:
-            await client.close()
+        # 注意：不要关闭客户端，因为是从 FACTORY 缓存获取的共享实例
 
     # ============ AI对话 ============
 
@@ -1101,10 +1100,10 @@ class ChatService:
 
                         # ✅ 创建工具调用记录（pending状态）
                         try:
-                            # 获取当前LLM序号（如果有）
+                            # 获取最近保存的 LLM 序号（从 LLM 适配器传递过来）
                             current_llm_sequence = None
-                            if hasattr(agent, 'adk_llm') and hasattr(agent.adk_llm, 'llm_sequence_counter'):
-                                current_llm_sequence = agent.adk_llm.llm_sequence_counter
+                            if hasattr(agent, 'adk_llm') and hasattr(agent.adk_llm, 'last_llm_sequence'):
+                                current_llm_sequence = agent.adk_llm.last_llm_sequence
 
                             tool_invocation = ToolInvocation(
                                 message_id=assistant_message_id,
@@ -1548,7 +1547,6 @@ AI回复：{assistant_message}...
             LOGGER.error(f"❌ LLM 生成标题失败: {e}")
             # 降级：返回通用标题，而不是截取用户消息
             return "对话记录"
-        finally:
-            await client.close()
+        # 注意：不要关闭客户端，因为是从 FACTORY 缓存获取的共享实例
 
 

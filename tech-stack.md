@@ -8,7 +8,7 @@
 | **Web框架** | FastAPI | 0.104+ | API开发 |
 | **LLM框架** | LangChain | 0.1.0+ | AI功能开发 |
 | **ORM** | SQLAlchemy | 2.0+ | 数据库交互 |
-| **数据库** | PostgreSQL | 15+ | 数据存储 |
+| **数据库** | MySQL | 8.0+ | 数据存储 |
 | **HTTP客户端** | httpx | 0.25+ | API请求 |
 | **数据验证** | Pydantic | 2.4+ | 数据模型 |
 | **数据库迁移** | Alembic | 1.12+ | 数据库版本控制 |
