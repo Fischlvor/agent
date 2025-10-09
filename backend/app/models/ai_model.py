@@ -2,8 +2,7 @@
 
 from typing import Any, Dict
 
-from sqlalchemy import Boolean, Column, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy import Boolean, Column, Integer, JSON, String, Text
 
 from app.models.base import BaseModel
 
@@ -31,8 +30,3 @@ class AIModel(BaseModel):
     def __repr__(self) -> str:
         """返回模型的字符串表示"""
         return f"<AIModel {self.name} ({self.model_id})>"
-
-    def to_dict(self) -> Dict[str, Any]:
-        """将模型转换为字典"""
-        return super().to_dict()
-

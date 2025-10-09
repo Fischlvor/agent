@@ -3,8 +3,7 @@
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
-                        String, Text)
-from sqlalchemy.dialects.postgresql import JSON
+                        JSON, String, Text)
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
