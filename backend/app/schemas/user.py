@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any, Dict, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -28,7 +27,7 @@ class UserUpdate(BaseModel):
 
 class UserResponse(BaseModel):
     """用户的响应Schema"""
-    id: UUID
+    id: int
     username: str
     email: str
     full_name: Optional[str] = None

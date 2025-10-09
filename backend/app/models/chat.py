@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any, Dict
-from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -14,7 +13,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -25,12 +24,13 @@ class ChatMessage(BaseModel):
 
     __tablename__ = "chat_messages"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4, comment="消息唯一标识符")
-    message_id = Column(String, unique=True, nullable=True, comment="消息外部ID，用于API引用")
-    session_id = Column(UUID(as_uuid=True),
-                        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
-                        comment="关联的会话ID")
-    parent_message_id = Column(String, nullable=True, comment="父消息ID，用于构建对话树")
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="消息主键ID")
+    message_id = Column(String(36), unique=True, nullable=False, comment="消息业务ID(UUID字符串)")
+    session_id = Column(String(36),
+                        ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
+                        nullable=False,
+                        comment="关联的会话业务ID")
+    parent_message_id = Column(String(36), nullable=True, comment="父消息业务ID")
     role = Column(String(20), nullable=True, comment="消息角色，如user、assistant、system、tool")
     content = Column(Text, nullable=True, comment="消息内容")
     message_type = Column(String(30), nullable=True, comment="消息类型，如text、image、file等")

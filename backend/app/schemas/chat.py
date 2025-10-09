@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +15,7 @@ class AIModelResponse(BaseModel):
         "from_attributes": True  # 支持从ORM对象创建
     }
 
-    id: UUID
+    id: int
     name: str
     model_id: str
     provider: str
@@ -57,9 +56,9 @@ class SessionResponse(BaseModel):
     """会话响应Schema"""
     model_config = {"from_attributes": True}
 
-    id: UUID
+    id: int
     session_id: Optional[str] = None
-    user_id: UUID
+    user_id: int
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
@@ -95,6 +94,7 @@ class MessageCreate(BaseModel):
 
     content: str = Field(..., description="消息内容")
     model_id: Optional[str] = Field(None, description="使用的模型ID")
+    parent_message_id: Optional[str] = Field(None, description="父消息ID（用于编辑消息时的关联）")
 
 
 class MessageUpdate(BaseModel):
@@ -109,9 +109,9 @@ class MessageResponse(BaseModel):
         "from_attributes": True  # 支持从ORM对象创建
     }
 
-    id: UUID
+    id: int
     message_id: Optional[str] = None
-    session_id: UUID
+    session_id: str
     parent_message_id: Optional[str] = None
     role: str
     content: Optional[str] = None
@@ -146,7 +146,7 @@ class WSMessageSend(BaseModel):
     model_config = {"protected_namespaces": ()}  # 禁用 model_ 命名空间保护
 
     type: str = Field("send_message", description="消息类型")
-    session_id: UUID = Field(..., description="会话ID")
+    session_id: str = Field(..., description="会话ID")
     content: str = Field(..., description="消息内容")
     model_id: Optional[str] = Field(None, description="模型ID")
 
@@ -154,7 +154,7 @@ class WSMessageSend(BaseModel):
 class WSMessageStop(BaseModel):
     """WebSocket停止生成请求"""
     type: str = Field("stop_generation", description="消息类型")
-    session_id: UUID = Field(..., description="会话ID")
+    session_id: str = Field(..., description="会话ID")
 
 
 class WSMessagePing(BaseModel):
@@ -170,7 +170,7 @@ class WSMessagePong(BaseModel):
 class WSMessageStart(BaseModel):
     """WebSocket开始生成响应"""
     type: str = Field("start", description="消息类型")
-    message_id: UUID = Field(..., description="消息ID")
+    message_id: str = Field(..., description="消息ID")
     event_id: int = Field(..., description="事件序列号（自增）")
     event_type: int = Field(2000, description="事件类型代码")
 
@@ -238,7 +238,7 @@ class WSMessageContent(BaseModel):
 class WSMessageDone(BaseModel):
     """WebSocket生成完成"""
     type: str = Field("done", description="消息类型")
-    message_id: UUID = Field(..., description="消息ID")
+    message_id: str = Field(..., description="消息ID")
     total_tokens: Optional[int] = Field(None, description="总令牌数")
     prompt_tokens: Optional[int] = Field(None, description="提示令牌数")
     completion_tokens: Optional[int] = Field(None, description="完成令牌数")

@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 from typing import Dict
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session

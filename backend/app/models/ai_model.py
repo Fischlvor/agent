@@ -1,10 +1,9 @@
 """AI模型配置模型定义"""
 
 from typing import Any, Dict
-from uuid import uuid4
 
 from sqlalchemy import Boolean, Column, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON
 
 from app.models.base import BaseModel
 
@@ -14,7 +13,7 @@ class AIModel(BaseModel):
 
     __tablename__ = "ai_models"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4, comment="模型唯一标识符")
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="模型主键ID")
     name = Column(String(100), nullable=False, comment="模型显示名称")
     model_id = Column(String(100), nullable=False, unique=True, comment="模型ID")
     provider = Column(String(50), nullable=False, comment="模型提供商")
