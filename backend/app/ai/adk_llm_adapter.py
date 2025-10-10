@@ -82,6 +82,7 @@ class ADKLlmAdapter(BaseLlm):
         has_tool_call = False
         llm_start_time = datetime.utcnow()  # 记录LLM调用开始时间
         collected_tool_calls = None  # 收集 tool_calls，在流结束后处理
+        invocation_data = None  # ✅ 保存 invocation 数据，用于生成事件
 
         async for chunk in response:
             # ✅ 提取 token 统计信息（最后一个 chunk 包含）
@@ -106,6 +107,17 @@ class ADKLlmAdapter(BaseLlm):
                 # 保存最近的 LLM 序号，供工具调用使用
                 if llm_sequence is not None:
                     object.__setattr__(self, 'last_llm_sequence', llm_sequence)
+
+                # ✅ 计算耗时并准备 invocation 数据
+                duration_ms = int((datetime.utcnow() - llm_start_time).total_seconds() * 1000)
+                invocation_data = {
+                    "sequence": llm_sequence,
+                    "prompt_tokens": prompt_count,
+                    "completion_tokens": completion_count,
+                    "total_tokens": prompt_count + completion_count,
+                    "duration_ms": duration_ms,
+                    "finish_reason": "STOP"
+                }
 
             # ✅ Ollama 流式响应格式：{"message": {"role": "assistant", "content": "..."}, "done": false}
             if "message" in chunk:
@@ -153,6 +165,9 @@ class ADKLlmAdapter(BaseLlm):
                     finish_reason="STOP",
                     usage_metadata=usage_metadata  # ✅ 添加 token 统计
                 )
+                # ✅ 保存 invocation_data 为实例变量（不能附加到 LlmResponse，因为 Pydantic extra='forbid'）
+                if invocation_data:
+                    object.__setattr__(self, 'pending_invocation_data', invocation_data)
                 yield adk_response
 
         # ✅ 流式结束：如果没有工具调用，返回一个完成标记（包含 usage_metadata）
@@ -163,6 +178,9 @@ class ADKLlmAdapter(BaseLlm):
                 finish_reason="STOP",
                 usage_metadata=usage_metadata  # ✅ 添加 token 统计
             )
+            # ✅ 保存 invocation_data 为实例变量
+            if invocation_data:
+                object.__setattr__(self, 'pending_invocation_data', invocation_data)
             yield final_response
 
         # ============ 步骤 3：如果没有流式内容，返回完整响应（降级） ============

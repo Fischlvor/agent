@@ -196,6 +196,16 @@ class ADKAgentAdapter:
                 session_id=session_id,
                 new_message=new_message
             ):
+                # ✅ 检查是否有pending的invocation数据需要发送
+                if hasattr(self.adk_llm, 'pending_invocation_data') and self.adk_llm.pending_invocation_data:
+                    invocation_data = self.adk_llm.pending_invocation_data
+                    object.__setattr__(self.adk_llm, 'pending_invocation_data', None)  # 清除
+
+                    yield {
+                        "type": "llm_invocation",
+                        "invocation_data": invocation_data
+                    }
+
                 # ✅ 使用前端事件适配器（ADK → 前端格式）
                 async for frontend_event in self.event_adapter.convert_adk_event_stream(event):
                     # 转换为 ChatService 期望的格式
@@ -280,6 +290,12 @@ class ADKAgentAdapter:
                 "type": "tool_result",
                 "tool_name": tool_result.get("name", ""),  # 需要工具名称来匹配
                 "result": tool_result.get("result")
+            }
+        elif event_type == "llm_invocation":
+            # ✅ LLM调用完成事件（每次LLM调用的详细统计）
+            return {
+                "type": "llm_invocation",
+                "invocation_data": frontend_event.get("invocation_data", {})
             }
         elif event_type == "usage":
             # ✅ Token 统计信息

@@ -15,6 +15,9 @@
 from typing import Dict, Any, AsyncIterator, Optional
 import re
 import uuid
+import logging
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FrontendEventAdapter:
@@ -39,6 +42,13 @@ class FrontendEventAdapter:
         if self.debug:
             event_type = type(adk_event).__name__
             print(f"[ADK→Frontend] {event_type}")
+
+        # ✅ 提取 LLM invocation 信息（每次LLM调用的详细统计）
+        if hasattr(adk_event, 'invocation_data') and adk_event.invocation_data:
+            yield {
+                "type": "llm_invocation",
+                "invocation_data": adk_event.invocation_data
+            }
 
         # ✅ 提取 token 统计信息（如果有）
         if hasattr(adk_event, 'usage_metadata') and adk_event.usage_metadata:
