@@ -541,6 +541,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           break;
 
+        case EventType.LLM_INVOCATION_COMPLETE:
+          return {
+            type: 'llm_invocation_complete',
+            session_id: eventData.conversation_id,
+            invocation: (eventData as any).invocation,
+            session_cumulative_tokens: (eventData as any).session_cumulative_tokens,
+            context_usage_percent: (eventData as any).context_usage_percent,
+            event_id: Number(envelope.event_id),
+            event_type: eventType
+          };
+
         case EventType.ERROR:
           if (eventData.message) {
             const content = JSON.parse(eventData.message.content);
@@ -896,6 +907,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
             set({ status: 'connected' });
           }
         }
+        break;
+
+      case 'llm_invocation_complete':
+        // ✅ 记录每次LLM调用的token统计
+        const invocationMsg = message as any;
+        console.log(
+          `[LLM调用 #${invocationMsg.invocation?.sequence}] ` +
+          `Tokens: ${invocationMsg.invocation?.tokens?.prompt}(输入) + ` +
+          `${invocationMsg.invocation?.tokens?.completion}(输出) = ` +
+          `${invocationMsg.invocation?.tokens?.total}(总计), ` +
+          `耗时: ${invocationMsg.invocation?.duration_ms}ms, ` +
+          `会话累计: ${invocationMsg.session_cumulative_tokens} tokens, ` +
+          `上下文使用率: ${invocationMsg.context_usage_percent}%`
+        );
+
+        // ✅ 实时更新：显示本次LLM调用的token使用量（总计）
+        set((state) => {
+          if (!state.currentSession) return {};
+
+          const currentTotal = invocationMsg.invocation?.tokens?.total || 0;
+          const maxTokens = state.currentSession.max_context_tokens || 32000;
+
+          return {
+            currentSession: {
+              ...state.currentSession,
+              // 实时显示本次调用的token数
+              current_context_tokens: currentTotal,
+              total_tokens: invocationMsg.session_cumulative_tokens,
+              context_usage_percent: (currentTotal / maxTokens) * 100
+            },
+            // 同时更新 sessions 列表中的对应会话
+            sessions: state.sessions.map((s) =>
+              (s.id === state.currentSession?.id || s.session_id === state.currentSession?.session_id)
+                ? {
+                    ...s,
+                    current_context_tokens: currentTotal,
+                    total_tokens: invocationMsg.session_cumulative_tokens,
+                    context_usage_percent: (currentTotal / maxTokens) * 100
+                  }
+                : s
+            )
+          };
+        });
         break;
 
       case 'error':

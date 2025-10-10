@@ -6,11 +6,12 @@
 
 - 🚀 **实时流式响应**：支持 thinking（思考过程）、tool_call（工具调用）、content（回复内容）的流式输出
 - 🧠 **多轮对话**：基于 Google ADK 的会话管理，自动维护上下文
-- 🔧 **真 MCP 协议**：完整实现 Model Context Protocol（JSON-RPC 2.0）
+- 🔧 **MCP 协议**：完整实现 Model Context Protocol（JSON-RPC 2.0）
 - 🛠️ **动态工具加载**：计算器、天气查询、网络搜索等工具自动集成
 - 💾 **双层会话管理**：业务层持久化 + SDK 层运行时缓存
 - 🔐 **用户认证**：JWT 令牌 + 数据库用户管理
 - 📊 **结构化存储**：完整记录 thinking 和 tool_call timeline
+- 📈 **实时 Token 追踪**：每次 LLM 调用的 token 使用量实时推送和 UI 显示
 
 ## 🏗️ 技术架构
 
@@ -189,6 +190,25 @@ ollama pull qwen3:8b
 - 保留编辑历史（parent_message_id）
 - 自动重新生成助手回复
 
+### 5. Token 实时追踪
+
+每次 LLM 调用完成时实时推送和显示：
+- **推送信息**：
+  - 输入/输出/总计 token 数量
+  - 调用序号和耗时（毫秒）
+  - 会话累计 token 数
+  - 上下文使用率百分比
+- **UI 显示**：
+  - 顶部 ContextProgress 组件实时更新
+  - 显示本次调用的 token 使用量
+  - 圆形进度条动态显示（如：`2.3K / 32K context used`）
+  - 颜色根据使用率自动调整（< 70% 灰色，70-90% 橙色，> 90% 红色）
+- **控制台日志**：
+  ```
+  [LLM调用 #3] Tokens: 1498(输入) + 819(输出) = 2317(总计), 
+  耗时: 12974ms, 会话累计: 4143 tokens, 上下文使用率: 12.95%
+  ```
+
 ## 📚 详细文档
 
 - [项目结构文档](./project-structure.md) - 完整的目录结构说明
@@ -263,18 +283,73 @@ npm run lint
 
 ## 📝 更新日志
 
+### 2025-10-10
+
+#### 📊 LLM Token 实时追踪与显示
+- **实时推送**：每次 LLM 调用完成时推送详细的 token 统计信息
+  - 输入/输出/总计 token 数量
+  - 调用序号和耗时
+  - 会话累计 token 数
+  - 上下文使用率百分比
+- **UI 实时更新**：ContextProgress 组件实时显示本次调用的 token 使用量
+  - 圆形进度条动态更新（`2.3K / 32K context used`）
+  - 颜色根据使用率自动调整（灰色→橙色→红色）
+  - 平滑动画过渡效果
+- **新增事件类型**：`LLM_INVOCATION_COMPLETE` (5000) 
+
+### 2025-10-09
+
+#### ✨ 对话功能增强 (6a19824)
+- 新增调用统计分析接口（`/api/analytics`）
+- 实现 Token 使用追踪（InvocationLog 模型）
+- 重构主键类型为整型，提升性能
+- 优化 AI 模型调用记录
+- 前端新增事件常量管理
+- 改进错误处理和日志记录
+
+### 2025-10-08
+
+#### 🧠 智能摘要功能 (ab8fa75)
+- 新增会话自动摘要生成
+- 实现上下文进度追踪
+- 添加上下文管理字段（`context_window_size`、`context_usage_percentage`）
+- 前端新增上下文进度组件（ContextProgress）
+- 优化聊天服务的上下文处理
+
 ### 2025-10-07
 
-#### ✅ 完成功能
-- 实现真正的 MCP 协议（JSON-RPC 2.0）
-- ADK SessionService 验证和文档完善
-- MCP 工具参数描述自动提取
-- 删除调试日志，代码清理
+#### 📊 Token 统计 (bcce693)
+- 实现 Token 使用记录和统计
+- 新增速率限制中间件
+- 增强 Redis 客户端功能
+- 优化 ADK Agent 和 LLM 适配器
+- 改进 WebSocket 连接管理
+- 新增系统提示词配置
 
-#### 🗑️ 移除内容
-- 冗余的 `adk_tools_adapter.py`
-- 旧的 `mcp_protocol.py`（根目录）
-- `adk_to_mcp_adapter.py` → 重命名为 `frontend_event_adapter.py`
+#### 📚 文档完善 (a0c389f)
+- 创建完整的 README 文档
+- 更新项目结构说明（project-structure.md）
+- 添加技术栈详细说明
+
+#### 🚀 核心架构实现 (8779dcb)
+- 实现 Google ADK 集成
+- 完整的 MCP 协议实现（JSON-RPC 2.0）
+- 创建 ADK Agent 适配器
+- 实现 ADK LLM 适配器（支持 Ollama/OpenAI）
+- 新增 MCP 工具服务器和客户端
+- 实现前端事件适配器
+
+### 2025-10-06
+
+#### 🎉 项目初始化 (f911252)
+- 搭建 FastAPI + Next.js 基础架构
+- 实现用户认证系统（JWT + bcrypt）
+- 创建数据库模型（User、Session、Message、AIModel）
+- 实现基础 AI 工具（Calculator、Weather、Search）
+- 搭建 WebSocket 实时通信
+- 配置 Docker 和 Alembic 数据库迁移
+- 创建前端聊天界面和状态管理
+- 编写项目结构和技术栈文档
 
 ## 🤝 贡献指南
 
