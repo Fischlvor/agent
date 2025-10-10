@@ -23,7 +23,7 @@
 | **FastAPI** | 0.109+ | Web 框架 |
 | **Google ADK** | 0.1.0+ | Agent Development Kit |
 | **SQLAlchemy** | 2.0+ | ORM 框架 |
-| **PostgreSQL** | 15+ | 数据库 |
+| **MySQL** | 8.0+ | 数据库 |
 | **Pydantic** | 2.0+ | 数据验证 |
 | **WebSocket** | - | 实时通信 |
 
@@ -91,7 +91,7 @@ agent-project/
 
 - Python 3.11+
 - Node.js 18+
-- PostgreSQL 15+
+- MySQL 8.0+
 - Ollama（用于本地 LLM）
 
 ### 1. 后端启动
@@ -174,7 +174,7 @@ ollama pull qwen3:8b
 ### 3. 会话管理
 
 **业务层（永久存储）**：
-- PostgreSQL 数据库存储所有会话和消息
+- MySQL 数据库存储所有会话和消息
 - 支持会话列表、搜索、编辑、删除
 - 记录完整的 timeline（thinking + tool_call + content）
 
