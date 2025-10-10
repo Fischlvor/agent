@@ -23,6 +23,10 @@ export const EventType = {
   TOOL_CALL: 4000,
   TOOL_RESULT: 4001,
 
+  // 调用追踪事件 (5xxx)
+  LLM_INVOCATION_COMPLETE: 5000,
+  TOOL_INVOCATION_COMPLETE: 5001,
+
   // 会话事件 (6xxx)
   SESSION_TITLE_UPDATED: 6000,
 
@@ -49,6 +53,8 @@ export function getEventTypeName(eventType: number): string {
     [EventType.THINKING_COMPLETE]: '思考完成',
     [EventType.TOOL_CALL]: '工具调用',
     [EventType.TOOL_RESULT]: '工具结果',
+    [EventType.LLM_INVOCATION_COMPLETE]: 'LLM调用完成',
+    [EventType.TOOL_INVOCATION_COMPLETE]: '工具调用完成',
     [EventType.SESSION_TITLE_UPDATED]: '会话标题更新',
     [EventType.PING]: '心跳请求',
     [EventType.PONG]: '心跳响应',

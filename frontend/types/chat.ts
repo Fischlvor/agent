@@ -183,6 +183,7 @@ export type WSMessageType =
   | 'tool_result'
   | 'content'
   | 'done'
+  | 'llm_invocation_complete'
   | 'session_title_updated'
   | 'error'
   | 'info';
@@ -325,6 +326,25 @@ export interface WSSessionTitleUpdatedMessage extends WSBaseMessage {
   event_type: number;
 }
 
+export interface WSLlmInvocationCompleteMessage extends WSBaseMessage {
+  type: 'llm_invocation_complete';
+  session_id: string;
+  invocation: {
+    sequence: number;
+    tokens: {
+      prompt: number;
+      completion: number;
+      total: number;
+    };
+    duration_ms: number;
+    finish_reason: string;
+  };
+  session_cumulative_tokens: number;
+  context_usage_percent: number;
+  event_id: number;
+  event_type: number;
+}
+
 export type WSMessage =
   | WSConnectedMessage
   | WSPingMessage
@@ -338,6 +358,7 @@ export type WSMessage =
   | WSToolResultMessage
   | WSContentMessage
   | WSDoneMessage
+  | WSLlmInvocationCompleteMessage // ✅ LLM调用完成
   | WSSessionTitleUpdatedMessage  // ✅ 会话标题更新
   | WSErrorMessage
   | WSInfoMessage;
