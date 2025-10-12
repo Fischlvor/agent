@@ -8,6 +8,7 @@
 - 🧠 **多轮对话**：基于 Google ADK 的会话管理，自动维护上下文
 - 🔧 **MCP 协议**：完整实现 Model Context Protocol（JSON-RPC 2.0）
 - 🛠️ **动态工具加载**：计算器、天气查询、网络搜索等工具自动集成
+- 📚 **RAG 知识库**：基于 LangChain 的文档检索增强，支持 PDF/Word/HTML 等多种格式
 - 💾 **双层会话管理**：业务层持久化 + SDK 层运行时缓存
 - 🔐 **用户认证**：JWT 令牌 + 数据库用户管理
 - 📊 **结构化存储**：完整记录 thinking 和 tool_call timeline
@@ -41,9 +42,12 @@
 
 | 组件 | 说明 |
 |------|------|
+| **Google ADK** | Agent 开发工具包，管理对话和工具调用 |
 | **Ollama** | 本地 LLM 运行（Qwen3:8b） |
 | **OpenAI** | OpenAI API 支持（可选） |
-| **MCP** | 工具协议标准化 |
+| **MCP** | 工具协议标准化（JSON-RPC 2.0） |
+| **LangChain** | RAG 文档处理和检索增强 |
+| **FAISS** | 向量相似度搜索引擎 |
 
 ## 📁 项目结构
 
@@ -66,6 +70,8 @@ agent-project/
 │   │   │   │   └── tools_server.py       # 工具服务器
 │   │   │   ├── clients/       # LLM 客户端
 │   │   │   └── tools/         # 工具实现
+│   │   │       ├── general/   # 通用工具（计算器、天气等）
+│   │   │       └── rag/       # RAG 检索工具 📚
 │   │   ├── models/            # 数据库模型
 │   │   └── websocket/         # WebSocket 处理
 │   ├── tests/                 # 测试
@@ -170,6 +176,7 @@ ollama pull qwen3:8b
 | **Calculator** | 数学计算（支持四则运算、幂运算、括号） | CalculatorMCPServer |
 | **Weather** | 天气查询（OpenWeatherMap API） | WeatherMCPServer |
 | **Search** | 网络搜索（模拟） | SearchMCPServer |
+| **RAG Retriever** | 知识库检索（语义搜索）📚 | RAGMCPServer |
 
 ### 3. 会话管理
 
@@ -208,6 +215,32 @@ ollama pull qwen3:8b
   [LLM调用 #3] Tokens: 1498(输入) + 819(输出) = 2317(总计), 
   耗时: 12974ms, 会话累计: 4143 tokens, 上下文使用率: 12.95%
   ```
+
+### 6. RAG 知识库管理 📚
+
+基于 LangChain 的文档检索增强系统：
+
+**文档处理**：
+- 支持多种格式：PDF、Word、TXT、HTML、Markdown
+- 智能文本切分：RecursiveCharacterTextSplitter
+- 向量化存储：使用自有 embeddings 接口生成向量
+- FAISS 向量检索：高效的相似度搜索
+
+**知识库功能**：
+- 文档上传和管理
+- 自动文本切分和向量化
+- 语义相似度检索
+- 作为 MCP 工具供 Agent 调用
+
+**使用流程**：
+```
+1. 用户上传文档（PDF/Word/TXT 等）
+2. LangChain 加载并切分文档
+3. 调用 embeddings 接口生成向量
+4. 存入 FAISS 向量库
+5. Agent 对话时自动调用 RAG 工具检索相关内容
+6. LLM 基于检索结果生成回答
+```
 
 ## 📚 详细文档
 
@@ -282,6 +315,21 @@ npm run lint
 ```
 
 ## 📝 更新日志
+
+### 2025-10-11
+
+#### 📚 RAG 系统规划（即将实现）
+- **技术栈更新**：明确 Google ADK 作为 Agent 框架，LangChain 用于 RAG
+- **架构设计**：
+  - LangChain 负责文档加载、切分、向量化
+  - FAISS 向量存储和相似度搜索
+  - RAG 检索作为 MCP Tool 供 Agent 调用
+- **功能规划**：
+  - 支持 PDF、Word、TXT、HTML、Markdown 等格式
+  - 智能文本切分和向量化
+  - 语义相似度检索
+  - 知识库管理界面
+- **文档更新**：更新 tech-stack.md 和 README.md
 
 ### 2025-10-10
 
