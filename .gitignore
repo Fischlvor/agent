@@ -2,6 +2,7 @@
 backend/uvicorn.log
 backend/config/
 backend/tests/
+backend/alembic.ini
 
 # Frontend specific
 frontend/node_modules
@@ -13,6 +14,9 @@ frontend/build
 .env
 .env.local
 .env.*.local
+
+# Docker
+docker-compose.yml
 
 # Logs
 *.log
@@ -76,3 +80,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# RAG data
+backend/data/uploads/
+backend/data/knowledge_base/

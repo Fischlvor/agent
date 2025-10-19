@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session

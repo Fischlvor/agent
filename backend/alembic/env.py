@@ -2,10 +2,13 @@
 
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, create_engine
 from sqlalchemy import pool
 
 from alembic import context
+
+# 导入应用配置
+from app.core.config import SETTINGS
 
 # 导入所有模型
 from app.models.base import Base
@@ -67,9 +70,9 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    # 使用 SETTINGS 的数据库 URI
+    connectable = create_engine(
+        SETTINGS.database_uri,
         poolclass=pool.NullPool,
     )
 

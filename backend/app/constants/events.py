@@ -29,6 +29,9 @@ class EventType:
     # 会话事件 (6xxx)
     SESSION_TITLE_UPDATED = 6000  # 会话标题已更新
 
+    # 文档/知识库事件 (7xxx)
+    DOCUMENT_STATUS_UPDATE = 7000  # 文档状态更新
+
     # 心跳事件 (9xxx)
     PING = 9000  # 心跳请求
     PONG = 9001  # 心跳响应
@@ -51,6 +54,7 @@ def get_event_type_name(event_type: int) -> str:
         EventType.LLM_INVOCATION_COMPLETE: "LLM调用完成",
         EventType.TOOL_INVOCATION_COMPLETE: "工具调用完成",
         EventType.SESSION_TITLE_UPDATED: "会话标题更新",
+        EventType.DOCUMENT_STATUS_UPDATE: "文档状态更新",
         EventType.PING: "心跳请求",
         EventType.PONG: "心跳响应",
     }

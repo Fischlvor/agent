@@ -1,12 +1,25 @@
 'use client';
 
+import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { useEffect, useState } from 'react';
+
 interface ContextProgressProps {
   currentTokens: number;
   maxTokens: number;
 }
 
 export default function ContextProgress({ currentTokens, maxTokens }: ContextProgressProps) {
-  const percentage = (currentTokens / maxTokens) * 100;
+  // ✅ 使用动画数字（800ms 平滑过渡）
+  const animatedTokens = useAnimatedNumber(currentTokens, 800);
+  const percentage = (animatedTokens / maxTokens) * 100;
+
+  // ✅ 脉冲效果：当 currentTokens 变化时触发
+  const [isPulsing, setIsPulsing] = useState(false);
+  useEffect(() => {
+    setIsPulsing(true);
+    const timer = setTimeout(() => setIsPulsing(false), 600);
+    return () => clearTimeout(timer);
+  }, [currentTokens]);
 
   // 计算圆形进度条参数
   const size = 40; // 圆形大小
@@ -53,7 +66,11 @@ export default function ContextProgress({ currentTokens, maxTokens }: ContextPro
             strokeDasharray={circumference}
             strokeDashoffset={offset}
             strokeLinecap="round"
-            className="transition-all duration-300"
+            className={`transition-all duration-300 ${isPulsing ? 'animate-pulse' : ''}`}
+            style={{
+              filter: isPulsing ? 'drop-shadow(0 0 4px currentColor)' : 'none',
+              opacity: isPulsing ? 1 : 0.95
+            }}
           />
         </svg>
         {/* 百分比文字 */}
@@ -74,7 +91,7 @@ export default function ContextProgress({ currentTokens, maxTokens }: ContextPro
             ? 'text-amber-600'
             : 'text-gray-700'
         }`}>
-          {(currentTokens / 1000).toFixed(1)}K
+          {(animatedTokens / 1000).toFixed(1)}K
         </span>
         <span className="text-gray-400">/</span>
         <span className="text-gray-600">

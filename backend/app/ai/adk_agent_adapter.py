@@ -25,6 +25,7 @@ _GLOBAL_MCP_CLIENT_CACHE: Dict[str, Any] = {}
 _GLOBAL_ADK_TOOLS_CACHE: Dict[str, List] = {}
 _GLOBAL_AGENT_CACHE: Dict[str, Any] = {}  # Agent 实例缓存
 _GLOBAL_RUNNER_CACHE: Dict[str, Any] = {}  # Runner 实例缓存
+_GLOBAL_ADK_LLM_CACHE: Dict[str, Any] = {}  # ADK LLM 实例缓存
 
 
 class ADKAgentAdapter:
@@ -52,8 +53,9 @@ class ADKAgentAdapter:
         self.max_iterations = max_iterations
         self.debug = debug
 
-        # 创建 ADK LLM 适配器
-        self.adk_llm = ADKLlmAdapter(our_client=client, model_name="custom")
+        # 创建 ADK LLM 适配器（使用客户端的实际模型名称）
+        model_name = getattr(client, 'model', 'unknown')  # 从客户端获取模型名称
+        self.adk_llm = ADKLlmAdapter(our_client=client, model_name=model_name)
         # ✅ 保存自己的引用，方便 LLM adapter 访问历史消息
         self.adk_llm.agent_adapter = self
 
@@ -110,6 +112,9 @@ class ADKAgentAdapter:
             _GLOBAL_MCP_CLIENT_CACHE[cache_key] = mcp_client
             _GLOBAL_ADK_TOOLS_CACHE[cache_key] = adk_tools
 
+            # ✅ 缓存 adk_llm（确保每次使用同一个实例）
+            _GLOBAL_ADK_LLM_CACHE[cache_key] = self.adk_llm
+
             # 创建 ADK Agent
             agent = Agent(
                 name="chat_agent",
@@ -131,6 +136,22 @@ class ADKAgentAdapter:
         # 使用缓存的实例
         self.adk_agent = _GLOBAL_AGENT_CACHE[cache_key]
         self.adk_runner = _GLOBAL_RUNNER_CACHE[cache_key]
+
+        # ✅ 使用缓存的 adk_llm（而不是新创建的），并更新其追踪属性
+        cached_adk_llm = _GLOBAL_ADK_LLM_CACHE[cache_key]
+
+        # 将当前 adk_llm 的追踪属性复制到缓存的 adk_llm
+        if hasattr(self.adk_llm, 'db_session'):
+            object.__setattr__(cached_adk_llm, 'db_session', self.adk_llm.db_session)
+        if hasattr(self.adk_llm, 'current_session_id'):
+            object.__setattr__(cached_adk_llm, 'current_session_id', self.adk_llm.current_session_id)
+        if hasattr(self.adk_llm, 'current_message_id'):
+            object.__setattr__(cached_adk_llm, 'current_message_id', self.adk_llm.current_message_id)
+        if hasattr(self.adk_llm, 'llm_sequence_counter'):
+            object.__setattr__(cached_adk_llm, 'llm_sequence_counter', self.adk_llm.llm_sequence_counter)
+
+        # 使用缓存的 adk_llm
+        self.adk_llm = cached_adk_llm
 
         # ✅ 更新 adk_llm 的引用（确保能访问最新的 _history_messages）
         self.adk_llm.agent_adapter = self
@@ -157,6 +178,17 @@ class ADKAgentAdapter:
                 new_message=new_message
             ):
                 yield event
+
+            # ✅ 最后检查一次 pending_invocation_data（处理工具调用场景）
+            if hasattr(self.adk_llm, 'pending_invocation_data') and self.adk_llm.pending_invocation_data:
+                invocation_data = self.adk_llm.pending_invocation_data
+                object.__setattr__(self.adk_llm, 'pending_invocation_data', None)
+
+                LOGGER.info(f"📤 [最后检查] yield llm_invocation: sequence={invocation_data.get('sequence')}, tokens={invocation_data.get('total_tokens')}")
+                yield {
+                    "type": "llm_invocation",
+                    "invocation_data": invocation_data
+                }
 
         except (RuntimeError, ValueError, ConnectionError) as e:
             LOGGER.error(f"ADK Agent 运行错误: {str(e)}", exc_info=True)
@@ -196,11 +228,12 @@ class ADKAgentAdapter:
                 session_id=session_id,
                 new_message=new_message
             ):
-                # ✅ 检查是否有pending的invocation数据需要发送
+                # ✅ 先检查是否有pending的invocation数据需要发送（顺序很重要！）
                 if hasattr(self.adk_llm, 'pending_invocation_data') and self.adk_llm.pending_invocation_data:
                     invocation_data = self.adk_llm.pending_invocation_data
                     object.__setattr__(self.adk_llm, 'pending_invocation_data', None)  # 清除
 
+                    LOGGER.info(f"📤 yield llm_invocation: sequence={invocation_data.get('sequence')}, tokens={invocation_data.get('total_tokens')}")
                     yield {
                         "type": "llm_invocation",
                         "invocation_data": invocation_data

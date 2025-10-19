@@ -14,10 +14,18 @@ ENGINE = create_engine(
     pool_size=20,              # 连接池大小（根据并发量调整）
     max_overflow=10,           # 超出 pool_size 后最多创建10个临时连接
     pool_timeout=30,           # 获取连接的超时时间（秒）
-    pool_recycle=3600,         # 1小时后回收连接（防止连接过期）
-    pool_pre_ping=True,        # 使用前检查连接是否有效
+    pool_recycle=1800,         # 30分钟后回收连接（避免远程连接超时）
+    pool_pre_ping=True,        # 使用前检查连接是否有效（重要！）
     echo=False,                # 不打印SQL语句（生产环境）
-    echo_pool=False            # 不打印连接池日志
+    echo_pool=False,           # 不打印连接池日志
+    # PostgreSQL特定配置
+    connect_args={
+        "connect_timeout": 10,  # 连接超时10秒
+        "keepalives": 1,        # 启用TCP keepalive
+        "keepalives_idle": 30,  # 空闲30秒后发送keepalive
+        "keepalives_interval": 10,  # keepalive间隔10秒
+        "keepalives_count": 5,  # keepalive重试5次
+    }
 )
 
 # 创建会话工厂

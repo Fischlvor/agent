@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from typing import Dict
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db, SESSION_LOCAL
 from app.middleware.auth import get_current_user_ws  # noqa: E402
 from app.services.chat_service import ChatService
+from app.constants.events import EventType
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +74,37 @@ class ConnectionManager:
                 # 发送失败，断开连接
                 await self.disconnect(user_id)
                 raise
+
+    async def notify_document_status(self, user_id: str, kb_id: int, doc_id: int, status: str, error_msg: str = None):
+        """通知文档状态更新（统一格式）
+
+        Args:
+            user_id: 用户ID
+            kb_id: 知识库ID
+            doc_id: 文档ID
+            status: 文档状态 (pending/processing/completed/failed)
+            error_msg: 错误信息（可选）
+        """
+        # 使用统一的WebSocket消息格式
+        event_data = {
+            "kb_id": kb_id,
+            "doc_id": doc_id,
+            "status": status,
+            "error_msg": error_msg
+        }
+
+        message = {
+            "event_type": EventType.DOCUMENT_STATUS_UPDATE,
+            "event_id": str(uuid4()),  # 使用UUID作为事件ID
+            "event_data": json.dumps(event_data, ensure_ascii=False)
+        }
+
+        if user_id in self.active_connections:
+            try:
+                await self.send_message(user_id, message)
+                LOGGER.info(f"通知用户 {user_id} 文档 {doc_id} 状态更新: {status}")
+            except Exception as e:
+                LOGGER.warning(f"通知文档状态失败: {e}")
 
     async def _heartbeat(self, user_id: str, websocket: WebSocket):
         """心跳检测

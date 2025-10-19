@@ -1,22 +1,28 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/store/chatStore';
 import type { ChatSession } from '@/types/chat';
+import { BookOpenIcon } from '@heroicons/react/24/outline';
+import UserMenu from './UserMenu';
 
 interface SessionSidebarProps {
   isOpen: boolean;
   onToggle: () => void;
   onNewChat: () => void;
+  currentSessionId?: string | null;
 }
 
-export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionSidebarProps) {
-  const { sessions, currentSession, selectSession, deleteSession, updateSessionTitle } = useChatStore();
+export default function SessionSidebar({ isOpen, onToggle, onNewChat, currentSessionId }: SessionSidebarProps) {
+  const router = useRouter();
+  const { sessions, selectSession, deleteSession, updateSessionTitle } = useChatStore();
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
   const handleSelectSession = (sessionId: string) => {
-    selectSession(sessionId);
+    // 跳转到会话详情页
+    router.push(`/chat/${sessionId}`);
   };
 
   const handleStartEdit = (session: ChatSession, e: React.MouseEvent) => {
@@ -40,6 +46,15 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
   const handleDelete = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('确定要删除这个会话吗？')) {
+      // ✅ 检查是否删除的是当前会话
+      const isDeletingCurrentSession = currentSessionId === sessionId;
+
+      // ✅ 如果删除的是当前会话，先跳转
+      if (isDeletingCurrentSession) {
+        router.push('/chat');
+      }
+
+      // ✅ 立即调用删除（store 会设置 deletingSessionId 标记，会话页面会检测并跳过加载）
       await deleteSession(sessionId);
     }
   };
@@ -67,25 +82,31 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
     <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
       {/* 头部 */}
       <div className="p-4 border-b border-gray-200">
-        <button
-          onClick={onNewChat}
-          className="w-full btn-primary flex items-center justify-center space-x-2"
-        >
-          <svg
-            className="w-5 h-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div className="flex items-center space-x-3">
+          {/* 用户头像 */}
+          <UserMenu />
+
+          {/* 新建对话按钮 */}
+          <button
+            onClick={onNewChat}
+            className="flex-1 btn-primary flex items-center justify-center space-x-2"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-          <span>新建对话</span>
-        </button>
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+            <span>新建对话</span>
+          </button>
+        </div>
       </div>
 
       {/* 会话列表 */}
@@ -115,7 +136,7 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
                 onClick={() => handleSelectSession(session.session_id || session.id)}
                 className={`
                   px-4 py-3 cursor-pointer transition-colors relative group
-                  ${(currentSession?.session_id || currentSession?.id) === (session.session_id || session.id)
+                  ${currentSessionId === (session.session_id || session.id)
                     ? 'bg-primary-50 border-l-4 border-primary-500'
                     : 'hover:bg-gray-50 border-l-4 border-transparent'
                   }
@@ -215,6 +236,17 @@ export default function SessionSidebar({ isOpen, onToggle, onNewChat }: SessionS
             ))}
           </div>
         )}
+      </div>
+
+      {/* 底部 - 知识库管理入口 */}
+      <div className="p-4 border-t border-gray-200">
+        <button
+          onClick={() => router.push('/knowledge-bases')}
+          className="w-full flex items-center justify-center space-x-2 px-4 py-3 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <BookOpenIcon className="w-5 h-5" />
+          <span className="font-medium">知识库管理</span>
+        </button>
       </div>
     </div>
   );

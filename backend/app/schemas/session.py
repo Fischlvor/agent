@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -23,7 +24,7 @@ class SessionUpdate(SessionBase):
 class SessionResponse(SessionBase):
     """会话的响应Schema"""
     id: int
-    session_id: Optional[str] = None
+    session_id: Optional[UUID] = None  # 直接使用 UUID 类型，Pydantic 自动序列化为 JSON 字符串
     created_at: datetime
     last_activity_at: Optional[datetime] = None
     message_count: int = 0

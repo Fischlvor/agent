@@ -1,9 +1,10 @@
 """会话模型定义"""
 
 from typing import Any, Dict, List, TYPE_CHECKING
+import uuid
 
-from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
-                        JSON, String, Text)
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -21,10 +22,11 @@ class ChatSession(BaseModel):
                 primary_key=True,
                 autoincrement=True,
                 comment="会话主键ID")
-    session_id = Column(String(36),
+    session_id = Column(UUID(as_uuid=True),
                         unique=True,
                         nullable=False,
-                        comment="会话业务ID(UUID字符串)")
+                        default=uuid.uuid4,
+                        comment="会话业务ID(UUID)")
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -44,10 +46,10 @@ class ChatSession(BaseModel):
     ai_model = Column(String(50), nullable=True, comment="使用的AI模型")
     temperature = Column(Float, default=0.7, comment="AI模型温度参数")
     max_tokens = Column(Integer, default=4000, comment="最大令牌数限制")
-    context_data = Column(JSON, nullable=True, comment="上下文数据，JSON格式")
+    context_data = Column(JSONB, nullable=True, comment="上下文数据，JSONB格式")
     system_prompt = Column(Text, nullable=True, comment="系统提示词")
-    session_metadata = Column(JSON, nullable=True, comment="元数据，JSON格式")
-    tags = Column(JSON, nullable=True, comment="标签，JSON格式")
+    session_metadata = Column(JSONB, nullable=True, comment="元数据，JSONB格式")
+    tags = Column(JSONB, nullable=True, comment="标签，JSONB格式")
 
     # 关系
     messages = relationship("ChatMessage",
