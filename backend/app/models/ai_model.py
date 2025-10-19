@@ -2,7 +2,8 @@
 
 from typing import Any, Dict
 
-from sqlalchemy import Boolean, Column, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.base import BaseModel
 
@@ -25,7 +26,7 @@ class AIModel(BaseModel):
     is_active = Column(Boolean, default=True, comment="是否启用")
     icon_url = Column(String(500), nullable=True, comment="模型图标URL")
     display_order = Column(Integer, default=0, comment="显示顺序")
-    config = Column(JSON, nullable=True, comment="额外配置，JSON格式")
+    config = Column(JSONB, nullable=True, comment="额外配置，JSONB格式")
 
     def __repr__(self) -> str:
         """返回模型的字符串表示"""

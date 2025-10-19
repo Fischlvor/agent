@@ -76,3 +76,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# RAG data
+backend/data/uploads/
+backend/data/knowledge_base/

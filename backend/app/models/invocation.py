@@ -1,17 +1,10 @@
 """调用记录模型定义"""
 
 from datetime import datetime
+import uuid
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    ForeignKey,
-    Integer,
-    JSON,
-    String,
-    Text,
-)
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -24,13 +17,13 @@ class ModelInvocation(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="调用记录主键ID")
     message_id = Column(
-        String(36),
+        UUID(as_uuid=True),
         ForeignKey("chat_messages.message_id", ondelete="CASCADE"),
         nullable=False,
         comment="关联的消息业务ID"
     )
     session_id = Column(
-        String(36),
+        UUID(as_uuid=True),
         ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
         nullable=False,
         comment="关联的会话业务ID"
@@ -60,13 +53,13 @@ class ToolInvocation(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="调用记录主键ID")
     message_id = Column(
-        String(36),
+        UUID(as_uuid=True),
         ForeignKey("chat_messages.message_id", ondelete="CASCADE"),
         nullable=False,
         comment="关联的消息业务ID"
     )
     session_id = Column(
-        String(36),
+        UUID(as_uuid=True),
         ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
         nullable=False,
         comment="关联的会话业务ID"
@@ -74,7 +67,7 @@ class ToolInvocation(Base):
     sequence_number = Column(Integer, nullable=False, comment="第几次工具调用")
     triggered_by_llm_sequence = Column(Integer, nullable=True, comment="由第几次LLM调用触发")
     tool_name = Column(String(100), nullable=False, comment="工具名称")
-    arguments = Column(JSON, nullable=True, comment="输入参数")
+    arguments = Column(JSONB, nullable=True, comment="输入参数")
     result = Column(Text, nullable=True, comment="执行结果")
     status = Column(String(20), nullable=False, comment="执行状态")
     cache_hit = Column(Boolean, nullable=False, default=False, comment="是否命中缓存")

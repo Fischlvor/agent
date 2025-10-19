@@ -1,112 +1,168 @@
 /**
- * WebSocket 管理类
- * 负责 WebSocket 连接、重连、心跳、消息收发
+ * 全局WebSocket管理器（单例模式）
+ *
+ * 所有页面共享同一个WebSocket连接，通过event_type区分消息用途
  */
 
-import type { WSMessage, WSSendMessageRequest, WSStopGenerationRequest } from '@/types/chat';
+type MessageHandler = (message: any) => void;
 
-export type WSEventType = 'open' | 'close' | 'error' | 'message';
-
-export type WSEventHandler = (data?: any) => void;
-
-export class ChatWebSocketManager {
+class WebSocketManager {
+  private static instance: WebSocketManager | null = null;
   private ws: WebSocket | null = null;
-  private url: string;
-  private token: string;
-  private eventHandlers: Map<WSEventType, Set<WSEventHandler>> = new Map();
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000; // 初始重连延迟 1 秒
-  private heartbeatInterval: NodeJS.Timeout | null = null;
-  private isManualClose = false;
+  private handlers: Map<number, Set<MessageHandler>> = new Map();
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private disconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
 
-  constructor(baseUrl: string, token: string) {
-    // 将 http(s) 转换为 ws(s)
-    const wsUrl = baseUrl.replace(/^http/, 'ws');
-    this.url = `${wsUrl}/ws/chat?token=${encodeURIComponent(token)}`;
-    this.token = token;
+  private constructor() {}
+
+  static getInstance(): WebSocketManager {
+    if (!WebSocketManager.instance) {
+      WebSocketManager.instance = new WebSocketManager();
+    }
+    return WebSocketManager.instance;
   }
 
   /**
-   * 连接 WebSocket
+   * 连接WebSocket（如果未连接）
    */
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        resolve();
-        return;
-      }
+  connect(): void {
+    // 如果已连接或正在连接，直接返回
+    if (this.ws?.readyState === WebSocket.OPEN ||
+        this.ws?.readyState === WebSocket.CONNECTING ||
+        this.isConnecting) {
+      console.log('[WebSocket] Already connected or connecting, skip');
+      return;
+    }
 
-      if (this.isConnecting) {
-        reject(new Error('Already connecting'));
-        return;
-      }
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      console.warn('[WebSocket] No access token, skipping connection');
+      return;
+    }
 
-      this.isConnecting = true;
-      this.isManualClose = false;
+    this.isConnecting = true;
+    const wsUrl = `ws://localhost:8000/api/v1/ws/chat?token=${token}`;
 
+    console.log('[WebSocket] Connecting...');
+    this.ws = new WebSocket(wsUrl);
+
+    this.ws.onopen = () => {
+      this.isConnecting = false;
+      console.log('[WebSocket] Connected');
+    };
+
+    this.ws.onmessage = (event) => {
       try {
-        this.ws = new WebSocket(this.url);
+        const message = JSON.parse(event.data);
+        const eventType = message.event_type;
 
-        this.ws.onopen = () => {
-          console.log('[WebSocket] Connected');
-          this.isConnecting = false;
-          this.reconnectAttempts = 0;
-          this.startHeartbeat();
-          this.emit('open');
-          resolve();
-        };
-
-        this.ws.onclose = (event) => {
-          console.log('[WebSocket] Closed', event.code, event.reason);
-          this.isConnecting = false;
-          this.stopHeartbeat();
-          this.emit('close', event);
-
-          // 如果是 403（token 过期/无效），需要刷新 token 后重连
-          if (event.code === 1008 || event.code === 403) {
-            console.log('[WebSocket] Token 可能已过期，将刷新 token 后重连');
-            // 等待一小段时间，让前端有机会刷新 token
-            setTimeout(() => {
-              if (!this.isManualClose) {
-                this.reconnectWithNewToken();
-              }
-            }, 1000);
-          } else if (!this.isManualClose && this.reconnectAttempts < this.maxReconnectAttempts) {
-            // 其他情况的普通重连
-            this.reconnect();
-          }
-        };
-
-        this.ws.onerror = (error) => {
-          console.error('[WebSocket] Error', error);
-          this.isConnecting = false;
-          this.emit('error', error);
-          reject(error);
-        };
-
-        this.ws.onmessage = (event) => {
-          try {
-            const message: WSMessage = JSON.parse(event.data);
-            this.handleMessage(message);
-          } catch (error) {
-            console.error('[WebSocket] Failed to parse message', error);
-          }
-        };
+        // 分发消息给对应的处理器
+        if (eventType && this.handlers.has(eventType)) {
+          const handlers = this.handlers.get(eventType)!;
+          handlers.forEach(handler => {
+            try {
+              handler(message);
+            } catch (error) {
+              console.error('[WebSocket] Handler error:', error);
+            }
+          });
+        }
       } catch (error) {
-        this.isConnecting = false;
-        reject(error);
+        console.error('[WebSocket] Failed to parse message:', error);
       }
-    });
+    };
+
+    this.ws.onerror = (error) => {
+      this.isConnecting = false;
+      console.error('[WebSocket] Error:', error);
+    };
+
+    this.ws.onclose = () => {
+      this.isConnecting = false;
+      console.log('[WebSocket] Disconnected');
+      this.ws = null;
+
+      // 5秒后自动重连
+      if (!this.reconnectTimer) {
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          if (this.handlers.size > 0) {
+            console.log('[WebSocket] Auto reconnecting...');
+            this.connect();
+          }
+        }, 5000);
+      }
+    };
+  }
+
+  /**
+   * 订阅特定事件类型的消息
+   */
+  subscribe(eventType: number, handler: MessageHandler): () => void {
+    // 取消延迟断开（有新订阅者）
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+
+    if (!this.handlers.has(eventType)) {
+      this.handlers.set(eventType, new Set());
+    }
+    this.handlers.get(eventType)!.add(handler);
+
+    // 确保连接
+    this.connect();
+
+    // 返回取消订阅函数
+    return () => {
+      this.unsubscribe(eventType, handler);
+    };
+  }
+
+  /**
+   * 取消订阅
+   */
+  unsubscribe(eventType: number, handler: MessageHandler): void {
+    if (this.handlers.has(eventType)) {
+      this.handlers.get(eventType)!.delete(handler);
+
+      // 如果该事件类型没有订阅者了，移除
+      if (this.handlers.get(eventType)!.size === 0) {
+        this.handlers.delete(eventType);
+      }
+    }
+
+    // 如果没有任何订阅者，延迟1秒后断开（避免 React Strict Mode 快速重连）
+    if (this.handlers.size === 0 && this.ws) {
+      if (this.disconnectTimer) {
+        clearTimeout(this.disconnectTimer);
+      }
+
+      this.disconnectTimer = setTimeout(() => {
+        if (this.handlers.size === 0) {
+          console.log('[WebSocket] No subscribers for 1s, disconnecting...');
+          this.disconnect();
+        }
+        this.disconnectTimer = null;
+      }, 1000);
+    }
   }
 
   /**
    * 断开连接
    */
   disconnect(): void {
-    this.isManualClose = true;
-    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -114,137 +170,130 @@ export class ChatWebSocketManager {
   }
 
   /**
-   * 重连
-   */
-  private reconnect(): void {
-    this.reconnectAttempts++;
-    const delay = Math.min(
-      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
-      30000 // 最多 30 秒
-    );
-
-    console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    setTimeout(() => {
-      this.connect().catch((error) => {
-        console.error('[WebSocket] Reconnect failed', error);
-      });
-    }, delay);
-  }
-
-  /**
-   * 使用新 token 重连
-   * 用于 token 过期后的重连
-   */
-  private reconnectWithNewToken(): void {
-    console.log('[WebSocket] Attempting to reconnect with fresh token');
-
-    // 重置重连次数
-    this.reconnectAttempts = 0;
-
-    // 从 localStorage 获取最新的 token
-    const newToken = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-
-    if (newToken && newToken !== this.token) {
-      console.log('[WebSocket] Found new token, updating connection');
-      this.token = newToken;
-      // 更新 WebSocket URL
-      const wsUrl = this.url.split('?')[0]; // 移除旧的 token
-      this.url = `${wsUrl}?token=${encodeURIComponent(newToken)}`;
-    }
-
-    // 尝试重连
-    this.connect().catch((error) => {
-      console.error('[WebSocket] Reconnect with new token failed', error);
-      // 如果还是失败，使用普通重连逻辑
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.reconnect();
-      }
-    });
-  }
-
-  /**
-   * 启动心跳
-   */
-  private startHeartbeat(): void {
-    this.stopHeartbeat();
-    // 每 25 秒发送一次 ping（服务端 30 秒超时）
-    this.heartbeatInterval = setInterval(() => {
-      this.send({ type: 'ping' });
-    }, 25000);
-  }
-
-  /**
-   * 停止心跳
-   */
-  private stopHeartbeat(): void {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-  }
-
-  /**
    * 发送消息
    */
-  send(message: WSSendMessageRequest | WSStopGenerationRequest | { type: 'ping' }): void {
+  send(message: any): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     } else {
-      console.error('[WebSocket] Cannot send message, connection not open');
+      console.warn('[WebSocket] Not connected, cannot send message');
     }
   }
+}
 
-  /**
-   * 处理收到的消息
-   */
-  private handleMessage(message: WSMessage): void {
-    // console.log('[WebSocket] Received message', message.type);
-    this.emit('message', message);
+// 导出单例实例（用于知识库等简单场景）
+export const wsManager = WebSocketManager.getInstance();
+
+/**
+ * ChatWebSocketManager 适配器
+ * 为 chatStore 提供事件驱动的 API，内部使用全局 wsManager
+ */
+export class ChatWebSocketManager {
+  private baseUrl: string;
+  private token: string;
+  private eventHandlers: Map<string, Set<Function>> = new Map();
+  private unsubscribers: (() => void)[] = [];
+
+  constructor(baseUrl: string, token: string) {
+    this.baseUrl = baseUrl;
+    this.token = token;
   }
 
-  /**
-   * 注册事件监听器
-   */
-  on(event: WSEventType, handler: WSEventHandler): void {
+  get isConnected(): boolean {
+    return wsManager['ws']?.readyState === WebSocket.OPEN;
+  }
+
+  on(event: string, handler: Function): void {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
     }
     this.eventHandlers.get(event)!.add(handler);
   }
 
-  /**
-   * 取消事件监听器
-   */
-  off(event: WSEventType, handler: WSEventHandler): void {
-    const handlers = this.eventHandlers.get(event);
-    if (handlers) {
-      handlers.delete(handler);
-    }
+  async connect(): Promise<void> {
+    // 先确保全局 wsManager 已连接
+    wsManager.connect();
+
+    // 订阅聊天相关的事件类型
+    const chatEventTypes = [
+      2000, 2001, 2002,  // MESSAGE_START, MESSAGE_CONTENT, MESSAGE_DONE
+      3000, 3001, 3002,  // THINKING_START, THINKING_DELTA, THINKING_COMPLETE
+      4000, 4001,        // TOOL_CALL, TOOL_RESULT
+      5000, 5001,        // LLM_INVOCATION_COMPLETE, TOOL_INVOCATION_COMPLETE
+      6000               // SESSION_TITLE_UPDATED
+    ];
+
+    chatEventTypes.forEach(eventType => {
+      const unsub = wsManager.subscribe(eventType, (message) => {
+        // 触发 'message' 事件，原样转发（chatStore 会自动解析）
+        const handlers = this.eventHandlers.get('message');
+        if (handlers) {
+          handlers.forEach(handler => handler(message));
+        }
+      });
+      this.unsubscribers.push(unsub);
+    });
+
+    // 等待连接建立，然后监听 close 和 error 事件
+    await new Promise<void>((resolve) => {
+      const checkConnection = () => {
+        const ws = (wsManager as any).ws;
+        if (ws?.readyState === WebSocket.OPEN) {
+          // 监听底层 WebSocket 的 close 和 error 事件
+          const closeHandler = () => {
+            const handlers = this.eventHandlers.get('close');
+            if (handlers) {
+              handlers.forEach(handler => handler());
+            }
+          };
+
+          const errorHandler = (error: Event) => {
+            const handlers = this.eventHandlers.get('error');
+            if (handlers) {
+              handlers.forEach(handler => handler(error));
+            }
+          };
+
+          ws.addEventListener('close', closeHandler);
+          ws.addEventListener('error', errorHandler);
+
+          // 保存以便清理
+          this.unsubscribers.push(() => {
+            ws.removeEventListener('close', closeHandler);
+            ws.removeEventListener('error', errorHandler);
+          });
+
+          resolve();
+        } else if (ws) {
+          // 连接中，等待 onopen
+          ws.addEventListener('open', () => {
+            checkConnection();
+          }, { once: true });
+        } else {
+          // 还没开始连接，稍后重试
+          setTimeout(checkConnection, 100);
+        }
+      };
+      checkConnection();
+    });
   }
 
-  /**
-   * 触发事件
-   */
-  private emit(event: WSEventType, data?: any): void {
-    const handlers = this.eventHandlers.get(event);
-    if (handlers) {
-      handlers.forEach((handler) => handler(data));
-    }
+  send(message: any): void {
+    wsManager.send(message);
   }
 
-  /**
-   * 获取连接状态
-   */
-  get readyState(): number {
-    return this.ws?.readyState ?? WebSocket.CLOSED;
-  }
-
-  /**
-   * 是否已连接
-   */
-  get isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+  disconnect(): void {
+    // 取消所有订阅
+    this.unsubscribers.forEach(unsub => unsub());
+    this.unsubscribers = [];
+    this.eventHandlers.clear();
   }
 }
 
+// 事件类型常量
+export const EventType = {
+  DOCUMENT_STATUS_UPDATE: 7000,
+  MESSAGE_CONTENT: 2001,
+  MESSAGE_DONE: 2002,
+  // ... 其他事件类型
+} as const;

@@ -76,7 +76,7 @@ class ChatService:
             包装后的消息
         """
         return {
-            "event_data": json.dumps(event_data, ensure_ascii=False),
+            "event_data": json.dumps(event_data, ensure_ascii=False, default=str),
             "event_id": str(event_id),
             "event_type": event_type
         }
@@ -138,7 +138,7 @@ class ChatService:
             创建的会话对象
         """
         session = ChatSession(
-            session_id=str(uuid4()),
+            session_id=uuid4(),  # UUID类型，不需要转字符串
             user_id=user.id,
             title=title or "新对话",
             status="active",
@@ -285,7 +285,7 @@ class ChatService:
 
         # 创建用户消息
         user_message = ChatMessage(
-            message_id=str(uuid4()),
+            message_id=uuid4(),  # UUID类型，不需要转字符串
             session_id=session.session_id,
             parent_message_id=parent_message_id,
             role="user",
@@ -352,7 +352,7 @@ class ChatService:
             创建的消息对象
         """
         message = ChatMessage(
-            message_id=str(uuid4()),
+            message_id=uuid4(),  # UUID类型，不需要转字符串
             session_id=session_id,
             role=role,
             content=content,
@@ -672,7 +672,7 @@ class ChatService:
 
             # 创建摘要消息
             summary_message = ChatMessage(
-                message_id=str(uuid4()),
+                message_id=uuid4(),  # UUID类型，不需要转字符串
                 session_id=session_id,
                 role="system",
                 content=f"【对话摘要】{summary_content}",
@@ -795,7 +795,7 @@ class ChatService:
 
         # ✅ 先创建一个pending状态的assistant消息占位符（用于外键约束）
         assistant_message_placeholder = ChatMessage(
-            message_id=str(uuid4()),
+            message_id=uuid4(),  # UUID类型，不需要转字符串
             session_id=session_id,
             role="assistant",
             content="",  # 空内容，稍后更新
@@ -1449,7 +1449,7 @@ class ChatService:
 
             # 推送给前端
             await manager.send_message(user_id, {
-                "event_data": json.dumps(event_data, ensure_ascii=False),
+                "event_data": json.dumps(event_data, ensure_ascii=False, default=str),
                 "event_id": "0",
                 "event_type": EventType.SESSION_TITLE_UPDATED
             })

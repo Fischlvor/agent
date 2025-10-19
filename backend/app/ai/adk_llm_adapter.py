@@ -81,7 +81,7 @@ class ADKLlmAdapter(BaseLlm):
         # 处理流式响应
         has_tool_call = False
         llm_start_time = datetime.utcnow()  # 记录LLM调用开始时间
-        collected_tool_calls = None  # 收集 tool_calls，在流结束后处理
+        collected_tool_calls = []  # ✅ 使用列表累积所有工具调用
         invocation_data = None  # ✅ 保存 invocation 数据，用于生成事件
 
         async for chunk in response:
@@ -135,7 +135,11 @@ class ADKLlmAdapter(BaseLlm):
                 # ✅ 收集工具调用（不立即yield，等done时再处理）
                 if "tool_calls" in message and message["tool_calls"]:
                     has_tool_call = True
-                    collected_tool_calls = message["tool_calls"]
+                    # ✅ 累积工具调用，而不是覆盖
+                    new_calls = message["tool_calls"]
+                    collected_tool_calls.extend(new_calls)
+                    # 🔍 调试：记录LLM输出的工具调用
+                    LOGGER.info(f"🔧 LLM输出工具调用: {[tc.get('function', {}).get('name') for tc in new_calls]} (累计: {len(collected_tool_calls)})")
 
         # ✅ 流式结束后处理工具调用（此时 last_llm_sequence 已设置）
         if has_tool_call and collected_tool_calls:
@@ -167,6 +171,7 @@ class ADKLlmAdapter(BaseLlm):
                 )
                 # ✅ 保存 invocation_data 为实例变量（不能附加到 LlmResponse，因为 Pydantic extra='forbid'）
                 if invocation_data:
+                    LOGGER.info(f"🔔 [工具调用] 设置 pending_invocation_data: sequence={invocation_data.get('sequence')}, tokens={invocation_data.get('total_tokens')}")
                     object.__setattr__(self, 'pending_invocation_data', invocation_data)
                 yield adk_response
 
@@ -274,6 +279,10 @@ class ADKLlmAdapter(BaseLlm):
         # ADK 的 Content 对象包含 role 和 parts
         for content in request.contents:
             role = content.role if hasattr(content, 'role') else 'user'
+
+            # ✅ 关键修复：将 ADK 的 'model' 角色转换为 Ollama 认识的 'assistant'
+            if role == 'model':
+                role = 'assistant'
 
             # ✅ 处理不同类型的 parts
             if not hasattr(content, 'parts'):
@@ -464,7 +473,7 @@ class ADKLlmAdapter(BaseLlm):
             # 计算耗时
             duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 
-            # 创建记录
+            # 创建记录（数据库UUID字段用字符串）
             invocation = ModelInvocation(
                 message_id=str(self.current_message_id),
                 session_id=str(self.current_session_id),
