@@ -2,6 +2,7 @@
 backend/uvicorn.log
 backend/config/
 backend/tests/
+backend/alembic.ini
 
 # Frontend specific
 frontend/node_modules
@@ -13,6 +14,8 @@ frontend/build
 .env
 .env.local
 .env.*.local
+
+# Docker
 docker-compose.yml
 
 # Logs
