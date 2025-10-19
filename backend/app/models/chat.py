@@ -2,18 +2,10 @@
 
 from datetime import datetime
 from typing import Any, Dict
+import uuid
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    JSON,
-    String,
-    Text,
-)
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -25,12 +17,12 @@ class ChatMessage(BaseModel):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="消息主键ID")
-    message_id = Column(String(36), unique=True, nullable=False, comment="消息业务ID(UUID字符串)")
-    session_id = Column(String(36),
+    message_id = Column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, comment="消息业务ID(UUID)")
+    session_id = Column(UUID(as_uuid=True),
                         ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
                         nullable=False,
                         comment="关联的会话业务ID")
-    parent_message_id = Column(String(36), nullable=True, comment="父消息业务ID")
+    parent_message_id = Column(UUID(as_uuid=True), nullable=True, comment="父消息业务ID")
     role = Column(String(20), nullable=True, comment="消息角色，如user、assistant、system、tool")
     content = Column(Text, nullable=True, comment="消息内容")
     message_type = Column(String(30), nullable=True, comment="消息类型，如text、image、file等")
@@ -48,12 +40,12 @@ class ChatMessage(BaseModel):
     completion_tokens = Column(Integer, nullable=True, comment="完成词令牌数")
     total_tokens = Column(Integer, nullable=True, comment="总令牌数")
     generation_time = Column(Float, nullable=True, comment="生成时间（秒）")
-    structured_content = Column(JSON, nullable=True, comment="结构化内容，JSON格式")
-    attachments = Column(JSON, nullable=True, comment="附件信息，JSON格式")
+    structured_content = Column(JSONB, nullable=True, comment="结构化内容，JSONB格式")
+    attachments = Column(JSONB, nullable=True, comment="附件信息，JSONB格式")
     user_rating = Column(Integer, nullable=True, comment="用户评分（1-5）")
     user_feedback = Column(Text, nullable=True, comment="用户反馈")
-    message_metadata = Column(JSON, nullable=True, comment="元数据，JSON格式")
-    error_info = Column(JSON, nullable=True, comment="错误信息，JSON格式")
+    message_metadata = Column(JSONB, nullable=True, comment="元数据，JSONB格式")
+    error_info = Column(JSONB, nullable=True, comment="错误信息，JSONB格式")
 
     # 关系
     session = relationship("ChatSession", back_populates="messages")

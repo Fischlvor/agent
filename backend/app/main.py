@@ -2,6 +2,12 @@
 
 import logging
 import sys
+import os
+
+# 强制 Hugging Face 离线模式（必须在导入任何 transformers/huggingface 库之前）
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import SETTINGS
 from app.core.redis_client import redis_service
+from app.middleware.jwt_middleware import JWTMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 
 # ============ 配置日志 ============
@@ -31,14 +38,11 @@ APP = FastAPI(
     openapi_url=f"{SETTINGS.api_v1_str}/openapi.json",
 )
 
-# 配置CORS
-APP.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # 前端地址
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 为兼容性添加小写别名（uvicorn 默认查找 'app'）
+app = APP
+
+# ⚠️ 注意：中间件按照添加顺序反向执行！最后添加的最先执行
+# 执行顺序: RateLimit -> JWT -> CORS
 
 # ✅ 添加频率限制中间件（每分钟最多60次请求）
 APP.add_middleware(
@@ -54,6 +58,18 @@ APP.add_middleware(
         "/openapi.json",
         "/api/v1/chat/ws"  # WebSocket 不限流
     ]
+)
+
+# ✅ JWT认证中间件（在限流之前执行，设置用户ID到request.state）
+APP.add_middleware(JWTMiddleware)
+
+# 配置CORS（最先执行）
+APP.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # 前端地址
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 注册API路由
@@ -75,6 +91,26 @@ async def startup_event():
         print("✗ Redis连接失败")
 
     print(f"API文档: http://localhost:8000{SETTINGS.api_v1_str}/docs")
+
+    # 初始化RAG模型管理器（单例模式）
+    try:
+        logging.info("初始化 RAG 模型管理器...")
+        from app.services.rag.model_manager import get_model_manager
+        import time
+
+        start = time.time()
+
+        # 初始化模型管理器（只加载一次，后续复用）
+        model_manager = get_model_manager()
+        model_manager.initialize()
+
+        load_time = time.time() - start
+
+        print(f"✅ RAG模型初始化完成 ({load_time:.2f}秒)")
+        logging.info(f"RAG models initialized in {load_time:.2f}s")
+    except Exception as e:
+        print(f"⚠️  RAG模型初始化失败: {e}")
+        logging.error(f"Failed to initialize RAG models: {e}")
 
 
 @APP.on_event("shutdown")

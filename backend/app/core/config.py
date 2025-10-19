@@ -124,13 +124,13 @@ class Settings(BaseSettings):
                     f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_db_name}"
                     f"?charset={self.mysql_charset}")
         elif self.database_type == "postgresql":
-            # 保留 PostgreSQL 支持（如需要）
+            # PostgreSQL 支持（使用psycopg2）
             postgres_config = self._config_data.get("database", {}).get("postgres", {})
             if postgres_config:
-                return (f"postgresql://{postgres_config.get('user', 'postgres')}:"
+                return (f"postgresql+psycopg2://{postgres_config.get('username', 'postgres')}:"
                         f"{postgres_config.get('password', 'postgres')}"
-                        f"@{postgres_config.get('server', 'localhost')}:"
-                        f"{postgres_config.get('port', 5432)}/{postgres_config.get('db', 'agent_db')}")
+                        f"@{postgres_config.get('host', 'localhost')}:"
+                        f"{postgres_config.get('port', 5432)}/{postgres_config.get('db_name', 'agent_db')}")
         # 可以在这里添加其他数据库类型的支持
         return None
 

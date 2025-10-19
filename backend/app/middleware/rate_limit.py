@@ -116,15 +116,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             request: 请求对象
 
         Returns:
-            限流键
+            限流键（不包含前缀，由 Redis 服务统一加前缀）
         """
-        # 优先使用用户ID（从请求状态中获取）
-        if hasattr(request.state, "user") and request.state.user:
-            user_id = getattr(request.state.user, "id", None)
-            if user_id:
-                return f"rate_limit:user:{user_id}"
+        # 优先使用用户ID（从JWT中间件设置的 request.state.user_id）
+        if hasattr(request.state, "user_id") and request.state.user_id:
+            return f"user:{request.state.user_id}"
 
         # 否则使用客户端IP
         client_ip = request.client.host if request.client else "unknown"
-        return f"rate_limit:ip:{client_ip}"
+        return f"ip:{client_ip}"
 

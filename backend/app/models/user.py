@@ -2,7 +2,8 @@
 
 from typing import Any, Dict
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.base import BaseModel
 
@@ -27,7 +28,7 @@ class User(BaseModel):
     reset_password_expires = Column(DateTime, nullable=True, comment="密码重置令牌过期时间")
     last_login_at = Column(DateTime, nullable=True, comment="最后登录时间")
     login_count = Column(Integer, default=0, comment="登录次数")
-    preferences = Column(JSON, default={}, comment="用户偏好设置，JSON格式")
+    preferences = Column(JSONB, default={}, comment="用户偏好设置，JSONB格式")
 
     def __repr__(self) -> str:
         """返回用户的字符串表示"""

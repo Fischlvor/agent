@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Dict, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -21,16 +22,16 @@ class ModelInvocationBase(BaseModel):
 class ModelInvocationCreate(ModelInvocationBase):
     """创建LLM调用记录的Schema"""
 
-    message_id: str = Field(..., description="关联的消息ID")
-    session_id: str = Field(..., description="关联的会话ID")
+    message_id: UUID = Field(..., description="关联的消息ID")
+    session_id: UUID = Field(..., description="关联的会话ID")
 
 
 class ModelInvocationResponse(ModelInvocationBase):
     """LLM调用记录响应Schema"""
 
     id: int = Field(..., description="调用记录ID")
-    message_id: str = Field(..., description="关联的消息ID")
-    session_id: str = Field(..., description="关联的会话ID")
+    message_id: UUID = Field(..., description="关联的消息ID")
+    session_id: UUID = Field(..., description="关联的会话ID")
     created_at: datetime = Field(..., description="创建时间")
 
     class Config:
@@ -55,16 +56,16 @@ class ToolInvocationBase(BaseModel):
 class ToolInvocationCreate(ToolInvocationBase):
     """创建工具调用记录的Schema"""
 
-    message_id: str = Field(..., description="关联的消息ID")
-    session_id: str = Field(..., description="关联的会话ID")
+    message_id: UUID = Field(..., description="关联的消息ID")
+    session_id: UUID = Field(..., description="关联的会话ID")
 
 
 class ToolInvocationResponse(ToolInvocationBase):
     """工具调用记录响应Schema"""
 
     id: int = Field(..., description="调用记录ID")
-    message_id: str = Field(..., description="关联的消息ID")
-    session_id: str = Field(..., description="关联的会话ID")
+    message_id: UUID = Field(..., description="关联的消息ID")
+    session_id: UUID = Field(..., description="关联的会话ID")
     created_at: datetime = Field(..., description="创建时间")
 
     class Config:

@@ -5,6 +5,13 @@ from app.models.base import BaseModel
 from app.models.chat import ChatMessage
 from app.models.session import ChatSession
 from app.models.user import User
+from app.models.rag import (
+    KnowledgeBase,
+    Document,
+    DocumentChunk,
+    DocumentStatus,
+    ChunkType,
+)
 
 __all__ = [
     "BaseModel",
@@ -12,4 +19,9 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     "AIModel",
+    "KnowledgeBase",
+    "Document",
+    "DocumentChunk",
+    "DocumentStatus",
+    "ChunkType",
 ]

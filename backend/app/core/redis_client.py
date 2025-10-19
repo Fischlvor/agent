@@ -393,10 +393,12 @@ class RedisService:
         max_requests: int,
         window_seconds: int
     ) -> tuple[bool, int]:
-        """检查是否超过频率限制（基于滑动窗口）
+        """检查是否超过频率限制（基于固定窗口）
+
+        使用 Lua 脚本保证原子性，避免竞态条件
 
         Args:
-            key: 限流键（通常是 user_id 或 IP）
+            key: 限流键（如 user:123 或 ip:127.0.0.1）
             max_requests: 时间窗口内最大请求数
             window_seconds: 时间窗口（秒）
 
@@ -404,21 +406,25 @@ class RedisService:
             (是否允许请求, 剩余请求数)
         """
         rate_key = f"rate_limit:{key}"
-        current = self.client.get(rate_key)
 
-        if current is None:
-            # 首次请求
-            self.client.setex(rate_key, window_seconds, "1")
-            return (True, max_requests - 1)
+        # Lua 脚本：原子性地执行 INCR 和 EXPIRE
+        # 返回值：当前计数
+        lua_script = """
+        local current = redis.call('INCR', KEYS[1])
+        if current == 1 then
+            redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return current
+        """
 
-        current_count = int(current)
-        if current_count >= max_requests:
+        # 执行 Lua 脚本
+        current_count = self.client.eval(lua_script, 1, rate_key, window_seconds)
+
+        if current_count > max_requests:
             # 超过限制
             return (False, 0)
 
-        # 未超过限制，增加计数
-        self.client.incr(rate_key)
-        return (True, max_requests - current_count - 1)
+        return (True, max_requests - current_count)
 
     def reset_rate_limit(self, key: str) -> bool:
         """重置频率限制（管理员操作）

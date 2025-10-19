@@ -2,10 +2,14 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '@/store/chatStore';
+import type { KnowledgeBase } from '@/lib/api/rag';
+import { BookOpenIcon } from '@heroicons/react/24/outline';
 
 export default function MessageInput() {
-  const { sendMessage, stopGeneration, status } = useChatStore();
+  const { sendMessage, stopGeneration, status, knowledgeBases } = useChatStore();
   const [input, setInput] = useState('');
+  const [selectedKbId, setSelectedKbId] = useState<number | null>(null);
+  const [showKbSelector, setShowKbSelector] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isGenerating = status === 'generating';
@@ -46,6 +50,65 @@ export default function MessageInput() {
   return (
     <div className="border-t border-gray-200 bg-white px-4 py-4">
       <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
+        {/* 知识库选择器 */}
+        {knowledgeBases.length > 0 && (
+          <div className="mb-3 flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowKbSelector(!showKbSelector)}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg border-2 transition-all ${
+                selectedKbId
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-gray-300 hover:border-gray-400 text-gray-700'
+              }`}
+            >
+              <BookOpenIcon className="w-4 h-4" />
+              <span className="text-sm font-medium">
+                {selectedKbId
+                  ? knowledgeBases.find((kb) => kb.id === selectedKbId)?.name || '选择知识库'
+                  : '选择知识库'}
+              </span>
+            </button>
+
+            {selectedKbId && (
+              <button
+                type="button"
+                onClick={() => setSelectedKbId(null)}
+                className="text-xs text-gray-500 hover:text-gray-700"
+              >
+                清除
+              </button>
+            )}
+
+            {showKbSelector && (
+              <div className="absolute bottom-full mb-2 left-0 bg-white border-2 border-gray-200 rounded-lg shadow-lg p-2 min-w-[300px] max-h-[300px] overflow-y-auto z-10">
+                <div className="text-xs text-gray-500 px-3 py-2 font-medium">选择知识库</div>
+                {knowledgeBases.map((kb) => (
+                  <button
+                    key={kb.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedKbId(kb.id);
+                      setShowKbSelector(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded hover:bg-gray-100 transition-colors ${
+                      selectedKbId === kb.id ? 'bg-blue-50 text-blue-700' : ''
+                    }`}
+                  >
+                    <div className="font-medium text-sm">{kb.name}</div>
+                    {kb.description && (
+                      <div className="text-xs text-gray-500 truncate">{kb.description}</div>
+                    )}
+                    <div className="text-xs text-gray-400 mt-1">
+                      {kb.doc_count} 文档 · {kb.chunk_count} 向量
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="relative flex items-end space-x-3">
           {/* 输入框 */}
           <div className="flex-1 relative">
@@ -123,6 +186,7 @@ export default function MessageInput() {
         {/* 提示文本 */}
         <div className="mt-2 text-xs text-gray-500 text-center">
           按 Cmd/Ctrl + Enter 快速发送 • 支持 Markdown 格式
+          {knowledgeBases.length > 0 && ' • 可选择知识库进行 RAG 检索'}
         </div>
       </form>
     </div>

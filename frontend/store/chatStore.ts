@@ -25,6 +25,7 @@ interface ChatState {
   wsManager: ChatWebSocketManager | null;
   error: string | null;
   messageTimeout: NodeJS.Timeout | null;  // ✅ 消息超时定时器
+  isInitialized: boolean; // ✅ 全局初始化标记（避免重复初始化）
 
   // 模型
   models: AIModel[];
@@ -34,15 +35,21 @@ interface ChatState {
   sessions: ChatSession[];
   currentSession: ChatSession | null;
   hasMoreSessions: boolean;
+  deletingSessionId: string | null; // ✅ 正在删除的会话ID
 
   // 消息
   messages: ChatMessage[];
   streamingMessage: StreamingMessage | null;
+  pendingMessage: string | null; // ✅ 待发送的消息（用于跳转后自动发送）
+
+  // 知识库
+  knowledgeBases: any[]; // ✅ 缓存知识库列表
 
   // Actions
   // 连接管理
   connect: (token: string) => Promise<void>;
   disconnect: () => void;
+  initialize: (token: string) => Promise<void>; // ✅ 统一的初始化方法
 
   // 模型管理
   loadModels: () => Promise<void>;
@@ -50,7 +57,7 @@ interface ChatState {
 
   // 会话管理
   loadSessions: (cursor?: string) => Promise<void>;
-  createSession: (title?: string) => Promise<void>;
+  createSession: (title?: string) => Promise<ChatSession>;
   selectSession: (sessionId: string) => Promise<void>;
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
@@ -61,6 +68,10 @@ interface ChatState {
   stopGeneration: () => void;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   editMessageAndRegenerate: (messageId: string, newContent: string) => Promise<void>;
+  setPendingMessage: (message: string | null) => void; // ✅ 设置待发送消息
+
+  // 知识库管理
+  loadKnowledgeBases: () => Promise<void>; // ✅ 加载知识库列表
 
   // WebSocket 消息处理
   parseWSMessageEnvelope: (envelope: WSMessageEnvelope) => WSMessage | null;
@@ -78,13 +89,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   wsManager: null,
   error: null,
   messageTimeout: null,  // ✅ 消息超时定时器
+  isInitialized: false, // ✅ 全局初始化标记
   models: [],
   currentModel: null,
   sessions: [],
   currentSession: null,
   hasMoreSessions: false,
+  deletingSessionId: null, // ✅ 正在删除的会话ID
   messages: [],
   streamingMessage: null,
+  pendingMessage: null, // ✅ 待发送消息
+  knowledgeBases: [], // ✅ 知识库列表
 
   // ============ 连接管理 ============
 
@@ -123,7 +138,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ status: 'idle' });
       });
 
-      manager.on('error', (error) => {
+      manager.on('error', (error: any) => {
         set({ status: 'error', error: error.message || 'WebSocket error' });
       });
 
@@ -147,6 +162,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (wsManager) {
       wsManager.disconnect();
       set({ wsManager: null, status: 'idle', messageTimeout: null });
+    }
+  },
+
+  // ✅ 统一的初始化方法（只执行一次）
+  initialize: async (token: string) => {
+    const { isInitialized } = get();
+
+    // 如果已经初始化，直接返回
+    if (isInitialized) {
+      console.log('[chatStore] 已初始化，跳过重复初始化');
+      return;
+    }
+
+    try {
+      console.log('[chatStore] 开始初始化...');
+      await get().connect(token);
+      // ✅ 并行加载模型、会话列表和知识库列表
+      await Promise.all([
+        get().loadModels(),
+        get().loadSessions(),
+        get().loadKnowledgeBases()
+      ]);
+      set({ isInitialized: true });
+      console.log('[chatStore] 初始化完成');
+    } catch (error) {
+      console.error('[chatStore] 初始化失败:', error);
+      throw error;
     }
   },
 
@@ -190,6 +232,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         currentSession: session,
         messages: []
       }));
+      return session; // ✅ 返回创建的会话
     } catch (error) {
       console.error('Failed to create session', error);
       throw error;
@@ -206,7 +249,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       const session = await apiClient.getSession(sessionId);
-      set({ currentSession: session });
+      set({ currentSession: session, error: null }); // ✅ 清除错误
       await get().loadMessages(sessionId);
 
       // ✅ 检查流式消息是否属于目标会话
@@ -231,8 +274,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : s
         )
       }));
-    } catch (error) {
+
+      // ✅ 检查是否有待发送的消息，如果有则自动发送
+      const { pendingMessage } = get();
+      if (pendingMessage) {
+        console.log('[selectSession] 检测到待发送消息，准备自动发送');
+        set({ pendingMessage: null }); // 清空待发送消息
+        // 延迟一下确保 WebSocket 连接就绪
+        setTimeout(() => {
+          get().sendMessage(pendingMessage);
+        }, 300);
+      }
+    } catch (error: any) {
       console.error('Failed to select session', error);
+      // ✅ 设置错误状态并抛出，让调用方处理
+      set({
+        error: error.message || 'Failed to load session',
+        currentSession: null
+      });
+      throw error; // ✅ 抛出错误让页面组件捕获
     }
   },
 
@@ -253,14 +313,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   deleteSession: async (sessionId: string) => {
     try {
+      // ✅ 标记正在删除
+      set({ deletingSessionId: sessionId });
+
       await apiClient.deleteSession(sessionId);
+
       set((state) => ({
         sessions: state.sessions.filter((s) => s.id !== sessionId && s.session_id !== sessionId),
         currentSession: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId) ? null : state.currentSession,
-        messages: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId) ? [] : state.messages
+        messages: (state.currentSession?.id === sessionId || state.currentSession?.session_id === sessionId) ? [] : state.messages,
+        deletingSessionId: null // ✅ 清除删除标记
       }));
     } catch (error) {
       console.error('Failed to delete session', error);
+      set({ deletingSessionId: null }); // ✅ 出错也要清除标记
     }
   },
 
@@ -1006,6 +1072,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ============ 清空状态 ============
 
+  // ✅ 设置待发送消息
+  setPendingMessage: (message: string | null) => {
+    set({ pendingMessage: message });
+  },
+
+  // ============ 知识库管理 ============
+
+  loadKnowledgeBases: async () => {
+    try {
+      // ✅ 如果已经加载过，直接返回
+      const { knowledgeBases } = get();
+      if (knowledgeBases.length > 0) {
+        console.log('[chatStore] 知识库已加载，跳过重复加载');
+        return;
+      }
+
+      const { knowledgeBaseApi } = await import('@/lib/api/rag');
+      const data = await knowledgeBaseApi.list();
+      set({ knowledgeBases: data.items });
+      console.log('[chatStore] 知识库加载完成:', data.items.length, '个');
+    } catch (error) {
+      console.error('Failed to load knowledge bases:', error);
+    }
+  },
+
   reset: () => {
     const { wsManager } = get();
     if (wsManager) {
@@ -1015,13 +1106,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       status: 'idle',
       wsManager: null,
       error: null,
+      isInitialized: false, // ✅ 重置初始化标记
       models: [],
       currentModel: null,
       sessions: [],
       currentSession: null,
       hasMoreSessions: false,
+      deletingSessionId: null, // ✅ 重置删除标记
       messages: [],
-      streamingMessage: null
+      streamingMessage: null,
+      pendingMessage: null, // ✅ 也重置待发送消息
+      knowledgeBases: [] // ✅ 重置知识库
     });
   }
 }));

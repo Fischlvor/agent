@@ -150,6 +150,11 @@ class ApiClient {
     }
   }
 
+  // 获取 axios 实例（供其他模块复用拦截器）
+  getAxiosInstance(): AxiosInstance {
+    return this.client;
+  }
+
   /**
    * 检查 JWT token 是否过期
    */
