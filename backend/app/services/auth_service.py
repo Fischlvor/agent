@@ -287,15 +287,16 @@ class AuthService:
 
     def _generate_tokens(self, user: User) -> Tuple[str, str]:
         """生成access和refresh tokens（内部方法）"""
-        # 生成Access Token
+        # 先生成Refresh Token
+        refresh_token = create_refresh_token()
+
+        # 生成Access Token（绑定 refresh_token_id）
         access_token = create_access_token({
             "sub": str(user.id),
             "username": user.username,
-            "role": user.role
+            "role": user.role,
+            "refresh_token_id": refresh_token  # ✅ 绑定 refresh token
         })
-
-        # 生成Refresh Token
-        refresh_token = create_refresh_token()
 
         # 保存Refresh Token到Redis（7天有效）
         redis_service.save_refresh_token(
