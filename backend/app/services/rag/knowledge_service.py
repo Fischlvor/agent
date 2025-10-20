@@ -340,6 +340,8 @@ class KnowledgeService:
         if not doc:
             return False
 
+        kb_id = doc.kb_id  # 保存知识库ID，因为删除后doc对象会失效
+
         # 删除文件
         if os.path.exists(doc.filepath):
             os.remove(doc.filepath)
@@ -347,6 +349,18 @@ class KnowledgeService:
         # 删除数据库记录（级联删除chunks和向量）
         self.db.delete(doc)
         self.db.commit()
+
+        # 更新知识库统计
+        kb = self.get_knowledge_base(kb_id)
+        if kb:
+            kb.doc_count = self.db.query(Document).filter(
+                Document.kb_id == kb_id
+            ).count()
+            kb.chunk_count = self.db.query(DocumentChunk).join(Document).filter(
+                Document.kb_id == kb_id,
+                DocumentChunk.chunk_type == ChunkType.CHILD
+            ).count()
+            self.db.commit()
 
         logger.info(f"Deleted document: {doc_id}")
         return True
