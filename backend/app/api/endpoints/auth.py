@@ -314,12 +314,18 @@ def refresh_token_endpoint(
             detail="缺少Refresh Token"
         )
 
-    result = auth_service.refresh_access_token(refresh_token)
-    if not result:
+    try:
+        result = auth_service.refresh_access_token(refresh_token)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh Token无效或已过期"
+            )
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh Token无效或已过期"
-        )
+            detail=str(e)
+        ) from e
 
     new_access_token, new_refresh_token, _ = result
 

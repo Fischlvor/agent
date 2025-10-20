@@ -104,6 +104,7 @@ agent-project/
 - Python 3.11+
 - Node.js 18+
 - PostgreSQL 14+（需启用 pgvector 扩展）
+- Redis 6+（用于 Token 和缓存管理）
 - Ollama（用于本地 LLM）
 - GPU（可选，用于 RAG 加速）
 
@@ -327,12 +328,30 @@ npm test
 
 ## 🔐 安全特性
 
-- JWT 令牌认证
-- 密码 bcrypt 加密
-- SQL 注入防护（ORM）
-- XSS 防护（前端）
-- CORS 配置
-- WebSocket 鉴权
+### 认证与授权
+- **JWT 双 Token 机制**：
+  - Access Token（JWT，60分钟有效）：用于 API 请求认证
+  - Refresh Token（UUID，7天有效）：用于刷新 Access Token
+  - Token 绑定机制：Access Token 与 Refresh Token 关联，删除 Refresh Token 后 Access Token 立即失效
+- **会话管理**：
+  - Refresh Token 存储在 Redis（支持多设备登录）
+  - 登出时删除 Refresh Token，Access Token 立即失效
+  - Token 刷新时删除旧 Token，防止重放攻击
+- **中间件保护**：
+  - JWT 中间件自动验证 Token 有效性
+  - Token 失效时直接返回 401（不继续执行请求）
+  - 支持黑名单机制（强制登出）
+
+### 数据安全
+- 密码 bcrypt 加密（自动加盐）
+- SQL 注入防护（SQLAlchemy ORM）
+- XSS 防护（前端输入过滤）
+- CORS 配置（限制跨域访问）
+
+### 通信安全
+- WebSocket 鉴权（Token 验证）
+- HTTPS 支持（生产环境推荐）
+- Cookie HttpOnly + SameSite（防 CSRF）
 
 ## 🛠️ 开发工具
 
@@ -358,6 +377,27 @@ npm run lint
 ```
 
 ## 📝 更新日志
+
+### 2025-10-20 (最新)
+
+#### 🔐 安全修复：Token 绑定机制 ⭐
+- **问题**：用户登出后，Access Token 在过期前（60分钟）仍可使用
+- **修复方案**：实现 Access Token 与 Refresh Token 绑定机制
+  - Token 生成：在 Access Token（JWT）中存储 `refresh_token_id`
+  - Token 验证：每次请求时检查绑定的 Refresh Token 是否存在
+  - 立即失效：删除 Refresh Token 后，Access Token 立即失效
+- **中间件拦截**：
+  - 验证失败时直接返回 401（不继续执行请求）
+  - Token 格式错误 → 401：无效的Token格式
+  - Token 缺少绑定 → 401：Token格式不支持（请重新登录）
+  - Refresh Token 失效 → 401：Token已失效（会话已结束）
+  - 系统错误 → 503：认证服务暂时不可用
+- **前端优化**：
+  - 修复 refresh token 失败时的死循环问题
+  - 失败时同步清除 localStorage 和 authStore
+  - 添加防重复跳转机制
+- **影响**：所有旧版本 Token（无 `refresh_token_id`）不再兼容，需重新登录
+- **参考文档**：详见本次修复的 commit 记录
 
 ### 2025-10-20
 
