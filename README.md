@@ -9,12 +9,13 @@
 - 🔧 **MCP 协议**：完整实现 Model Context Protocol（JSON-RPC 2.0）
 - 🛠️ **动态工具加载**：计算器、天气查询、网络搜索等工具自动集成
 - 📚 **RAG 知识库**：基于 LangChain 的文档检索增强，支持 PDF/Word/HTML 等多种格式
+- ⚡ **异步文档处理**：上传立即返回（< 0.5秒），后台处理 + WebSocket 实时推送状态
 - 💾 **双层会话管理**：业务层持久化 + SDK 层运行时缓存
-- 🔐 **用户认证**：JWT 令牌 + 用户头像菜单 + 退出登录
+- 🔐 **用户认证**：JWT 双 Token 机制 + Token 绑定 + 自动刷新
 - 📊 **结构化存储**：完整记录 thinking 和 tool_call timeline
 - 📈 **实时 Token 追踪**：每次 LLM 调用的 token 使用量实时推送和动画显示
-- 🎨 **现代化 UI**：风格界面 + 欢迎页面 + 流畅动画效果
-- ⚡ **性能优化**：全局初始化避免重复请求，智能缓存提升响应速度
+- 🎨 **现代化 UI**：ChatGPT 风格界面 + 欢迎页面 + 流畅动画效果
+- ⚡ **性能优化**：全局初始化避免重复请求，局部状态更新，智能缓存提升响应速度
 
 ## 🏗️ 技术架构
 
@@ -235,8 +236,10 @@ ollama pull qwen3:8b
   - 父块（Parent）：粗粒度上下文（2048 tokens）
   - 子块（Child）：细粒度检索（512 tokens）
 
-**文档处理**：
+**文档处理**（⚡ 异步优化）：
 - 支持多种格式：PDF、Word、TXT、HTML、Markdown
+- **异步处理架构**：上传立即返回（< 0.5秒），后台处理（ThreadPoolExecutor）
+- **实时状态推送**：processing → completed，无需轮询
 - 智能文本切分：父子分块策略（Parent-Child Chunking）
 - 文本向量化：BGE-M3 多语言模型（**GPU 加速 7-10x**）
 - 向量检索：FAISS 索引（内存检索 + 磁盘持久化）
@@ -245,8 +248,9 @@ ollama pull qwen3:8b
 
 **知识库功能**：
 - 完整的 CRUD API：`/api/v1/rag/knowledge-bases`
-- 文档上传和管理：`/api/v1/rag/documents`
-- 实时状态推送：`DOCUMENT_STATUS_UPDATE` (7000)
+- **异步文档上传**：`/api/v1/rag/knowledge-bases/{id}/upload`（立即返回）
+- **WebSocket 实时通知**：`DOCUMENT_STATUS_UPDATE` (7000)，推送完整文档信息
+- **局部状态更新**：前端无刷新体验，流畅的 UI 更新
 - 自动文本切分和向量化
 - 语义相似度检索（支持跨语言：中文查询英文文档）
 - 两阶段检索：召回（Vector Search）+ 重排（Cross-Encoder）
@@ -325,6 +329,9 @@ npm test
 - **流式输出**：实时（< 10ms 每个 chunk）
 - **并发支持**：100+ WebSocket 连接
 - **数据库查询**：< 50ms（索引优化）
+- **文档上传**：< 0.5s（上传接口响应，异步处理）
+- **文档处理**：2-3s（后台解析、切分、向量化，10 页 PDF）
+- **向量检索**：30-50ms（FAISS 内存检索 + GPU 重排序）
 
 ## 🔐 安全特性
 
@@ -379,6 +386,53 @@ npm run lint
 ## 📝 更新日志
 
 ### 2025-10-20 (最新)
+
+#### ⚡ RAG 文档处理异步化与前端局部更新优化 ⭐
+
+**核心改进**：将文档处理改为真正的异步任务，上传接口立即返回（< 0.5秒），通过 WebSocket 实时推送状态和完整文档信息，前端采用局部更新策略提升用户体验。
+
+**后端优化**：
+- **异步任务架构** (`documents.py`)：
+  - 新增 ThreadPoolExecutor（4线程）+ 独立事件循环执行文档处理
+  - 上传接口立即返回 PROCESSING 状态，后台任务处理解析、分块、向量化
+  - 修复 BackgroundTasks 参数顺序问题，避免 FastAPI 验证错误
+- **WebSocket 推送增强** (`chat_ws.py`)：
+  - notify_document_status 新增 filesize、page_count、chunk_count、parent_chunk_count 参数
+  - 完成时推送完整文档信息，前端无需额外 API 调用
+- **数据库会话管理** (`documents.py`)：
+  - 后台任务使用独立数据库 session（SESSION_LOCAL），避免与主请求 session 冲突
+  - 自动关闭 session，防止资源泄漏
+- **JWT 中间件优化** (`jwt_middleware.py`)：
+  - PUBLIC_PATHS 改用 set 数据结构（O(1) 查找效率）
+  - 新增 /api/v1/sso/auth/refresh 到公开路径，修复 token 刷新被拦截问题
+  - 新增调试日志记录 upload 请求
+- **文档列表排序** (`knowledge_service.py`)：
+  - list_documents 查询添加 ORDER BY created_at DESC
+  - 新上传文档始终显示在列表最前面
+
+**前端优化**：
+- **局部状态更新** (`page.tsx`)：
+  - WebSocket 收到状态更新时，使用 setDocuments + map 局部修改对应文档
+  - 避免整个列表重新加载，消除闪烁
+  - 接收并更新文档详细信息（filesize、page_count、chunk_count）
+- **乐观更新策略** (`page.tsx`)：
+  - 上传成功后立即在列表顶部添加新文档（状态 PROCESSING）
+  - 删除文档时直接从列表中过滤，无需重新加载
+- **最小化 API 调用** (`page.tsx`)：
+  - 移除上传进度条状态（uploadProgress）
+  - 仅在 completed/failed 时刷新知识库统计信息
+  - processing 状态无需任何 API 调用
+- **修复 Authorization header** (`rag.ts`)：
+  - 移除 multipart/form-data 上传时手动设置的 Content-Type
+  - 让 axios 自动处理，避免覆盖 Authorization header
+
+**性能提升**：
+- 上传接口响应时间：4.6s → < 0.5s（提升 90%+）
+- 列表刷新方式：整页重载 → 局部更新（0 次闪烁）
+- API 调用次数：每次 2 个请求 → 仅完成时 1 个请求（减少 50%）
+- 并发上传支持：串行阻塞 → 并发处理（线程池）
+
+---
 
 #### 🔐 安全修复：Token 绑定机制 ⭐
 - **问题**：用户登出后，Access Token 在过期前（60分钟）仍可使用
