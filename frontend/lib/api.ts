@@ -17,10 +17,12 @@ import type {
   SessionListResponse,
   UpdateMessageRequest
 } from '@/types/chat';
+import { useAuthStore } from '@/store/authStore';
 
 class ApiClient {
   private client: AxiosInstance;
   private isRefreshing = false;
+  private isRedirecting = false; // ✅ 防止重复跳转
   private failedQueue: Array<{
     resolve: (value?: any) => void;
     reject: (reason?: any) => void;
@@ -103,11 +105,20 @@ class ApiClient {
             originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
             return this.client(originalRequest);
           } catch (refreshError) {
-            // 刷新失败，清空队列，跳转登录
+            // 刷新失败，清空队列，清除所有认证状态
             this.processQueue(refreshError, null);
             this.removeToken();
+
+            // ✅ 清除 authStore 状态，防止死循环
             if (typeof window !== 'undefined') {
-              window.location.href = '/login';
+              const { logout } = useAuthStore.getState();
+              logout();
+
+              // 避免重复跳转
+              if (!this.isRedirecting) {
+                this.isRedirecting = true;
+                window.location.href = '/login';
+              }
             }
             return Promise.reject(refreshError);
           } finally {

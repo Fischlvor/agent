@@ -5,9 +5,10 @@ from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
 
 from app.core.security import decode_access_token
+from app.core.redis_client import redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,54 @@ class JWTMiddleware(BaseHTTPMiddleware):
                 payload = decode_access_token(token)
 
                 if payload and "sub" in payload:
-                    # 设置用户ID到request.state，供后续中间件和端点使用
-                    request.state.user_id = payload["sub"]
-                    #logger.info(f"JWT认证成功: user_id={payload['sub']}")
-            except Exception as e:
-                # Token 无效或过期，不设置用户信息，继续处理请求
-                logger.info(f"JWT解析失败: {e}")
-                pass
+                    # ✅ 验证绑定的 refresh token 是否还有效
+                    refresh_token_id = payload.get("refresh_token_id")
+                    if refresh_token_id:
+                        # 检查 refresh token 是否还在 Redis 中
+                        if redis_service.get_refresh_token(refresh_token_id):
+                            # Refresh token 有效，允许访问
+                            request.state.user_id = payload["sub"]
+                            #logger.info("JWT认证成功: user_id=%s", payload['sub'])
+                        else:
+                            # ✅ Refresh token 已被删除（登出/过期），直接返回 401
+                            logger.info("Access token 被拒绝: 绑定的 refresh token 已失效 (user_id=%s)", payload['sub'])
+                            return JSONResponse(
+                                status_code=401,
+                                content={"detail": "Token已失效（会话已结束）"},
+                                headers={"WWW-Authenticate": "Bearer"}
+                            )
+                    else:
+                        # ✅ 没有 refresh_token_id，直接返回 401（不兼容旧版本）
+                        logger.info("Access token 被拒绝: 缺少 refresh_token_id 绑定 (user_id=%s)", payload['sub'])
+                        return JSONResponse(
+                            status_code=401,
+                            content={"detail": "Token格式不支持（请重新登录）"},
+                            headers={"WWW-Authenticate": "Bearer"}
+                        )
+                else:
+                    # ✅ Token 解析失败或载荷无效，直接返回 401
+                    logger.warning("Token载荷无效")
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "无效的认证凭证"},
+                        headers={"WWW-Authenticate": "Bearer"}
+                    )
+            except (IndexError, KeyError, ValueError) as e:
+                # ✅ Token 格式错误，直接返回 401
+                logger.warning("Token格式错误: %s", str(e))
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "无效的Token格式"},
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                # ✅ 系统错误（如 Redis 连接失败），返回 503
+                logger.error("JWT中间件异常: %s", str(e), exc_info=True)
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "认证服务暂时不可用"},
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
 
         # 继续处理请求
         response = await call_next(request)
