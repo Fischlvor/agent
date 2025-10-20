@@ -20,6 +20,22 @@ class JWTMiddleware(BaseHTTPMiddleware):
     这样后续的中间件（如限流）可以直接使用用户ID
     """
 
+    # 不需要验证 token 的公开路径（使用 set 提高查找效率 O(1)）
+    PUBLIC_PATHS = {
+        "/api/v1/sso/auth/login/password",
+        "/api/v1/sso/auth/login/email-code",
+        "/api/v1/sso/auth/register",
+        "/api/v1/sso/auth/refresh",  # ✅ refresh 接口应该跳过 JWT 验证
+        "/api/v1/sso/auth/verify-email",
+        "/api/v1/sso/auth/send-login-code",
+        "/api/v1/sso/auth/resend-verification",
+        "/api/v1/sso/auth/forgot-password",
+        "/api/v1/sso/auth/reset-password",
+        "/api/v1/docs",
+        "/api/v1/openapi.json",
+        "/api/v1/health",
+    }
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """处理请求
 
@@ -30,6 +46,10 @@ class JWTMiddleware(BaseHTTPMiddleware):
         Returns:
             响应对象
         """
+        # ✅ O(1) 查找公开路径，跳过 JWT 验证
+        if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+
         # 尝试从 Authorization header 获取 token
         auth_header = request.headers.get("Authorization")
 

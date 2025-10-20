@@ -25,7 +25,6 @@ export default function KnowledgeBaseDetailPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
 
   // 加载知识库信息
   const loadKnowledgeBase = async () => {
@@ -61,15 +60,34 @@ export default function KnowledgeBaseDetailPage() {
     const handleDocumentStatus = (message: any) => {
       try {
         const eventData = message.event_data ? JSON.parse(message.event_data) : {};
-        const { kb_id, doc_id, status, error_msg } = eventData;
+        const { kb_id, doc_id, status, error_msg, filesize, page_count, chunk_count, parent_chunk_count } = eventData;
 
         // 只处理当前知识库的文档更新
         if (kb_id === kbId) {
           console.log(`Document ${doc_id} status updated: ${status}`);
 
-          // 刷新文档列表和知识库信息
-          loadDocuments();
-          loadKnowledgeBase();
+          // ✅ 局部更新：直接修改对应文档的状态和其他字段，避免整个列表刷新
+          setDocuments((prevDocs) =>
+            prevDocs.map((doc) =>
+              doc.id === doc_id
+                ? {
+                    ...doc,
+                    status,
+                    error_msg: error_msg || doc.error_msg,
+                    // ✅ 更新完整文档信息（如果有的话）
+                    ...(filesize !== undefined && filesize !== null ? { filesize } : {}),
+                    ...(page_count !== undefined && page_count !== null ? { page_count } : {}),
+                    ...(chunk_count !== undefined && chunk_count !== null ? { chunk_count } : {}),
+                    ...(parent_chunk_count !== undefined && parent_chunk_count !== null ? { parent_chunk_count } : {})
+                  }
+                : doc
+            )
+          );
+
+          // 只在完成时刷新知识库统计信息（doc_count, chunk_count）
+          if (status === 'completed' || status === 'failed') {
+            loadKnowledgeBase();
+          }
 
           // 显示通知
           if (status === 'completed') {
@@ -115,23 +133,32 @@ export default function KnowledgeBaseDetailPage() {
         }
 
         try {
-          setUploadProgress((prev) => ({ ...prev, [file.name]: 0 }));
-
           const result = await documentApi.upload(kbId, file);
+          toast.success(`${file.name} 上传成功，正在处理...`);
 
-          setUploadProgress((prev) => ({ ...prev, [file.name]: 100 }));
-          toast.success(`${file.name} 上传成功`);
+          // ✅ 乐观更新：立即添加新文档到列表（避免刷新整个列表）
+          const newDoc: Document = {
+            id: result.doc_id,
+            kb_id: kbId,
+            filename: result.filename,
+            filepath: '',
+            status: result.status as 'pending' | 'processing' | 'completed' | 'failed',
+            chunk_count: 0,
+            parent_chunk_count: 0,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+          setDocuments((prev) => [newDoc, ...prev]);
+
         } catch (error: any) {
           toast.error(`${file.name} 上传失败: ${error.response?.data?.detail || error.message}`);
         }
       }
 
-      // 刷新列表
-      await loadDocuments();
+      // ✅ 上传完成后刷新知识库统计信息（doc_count）
       await loadKnowledgeBase();
     } finally {
       setUploading(false);
-      setUploadProgress({});
     }
   };
 
@@ -144,7 +171,11 @@ export default function KnowledgeBaseDetailPage() {
     try {
       await documentApi.delete(doc.id);
       toast.success('文档已删除');
-      loadDocuments();
+
+      // ✅ 局部删除：直接从列表中移除，避免刷新整个列表
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+
+      // 刷新知识库统计信息
       loadKnowledgeBase();
     } catch (error: any) {
       toast.error('删除失败: ' + (error.response?.data?.detail || error.message));
@@ -236,27 +267,6 @@ export default function KnowledgeBaseDetailPage() {
           </div>
         </div>
 
-        {/* 上传进度 */}
-        {Object.keys(uploadProgress).length > 0 && (
-          <div className="bg-white rounded-xl shadow-lg p-4 mb-6">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">上传进度</h3>
-            {Object.entries(uploadProgress).map(([filename, progress]) => (
-              <div key={filename} className="mb-2">
-                <div className="flex justify-between text-xs text-gray-600 mb-1">
-                  <span className="truncate max-w-xs">{filename}</span>
-                  <span>{progress}%</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {/* 文档列表 */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -311,13 +321,15 @@ export default function KnowledgeBaseDetailPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {documents.map((doc) => (
                   <tr key={doc.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <DocumentTextIcon className="w-5 h-5 text-gray-400 mr-3" />
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{doc.filename}</div>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center max-w-md">
+                        <DocumentTextIcon className="w-5 h-5 text-gray-400 mr-3 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-gray-900 truncate" title={doc.filename}>
+                            {doc.filename}
+                          </div>
                           {doc.metadata?.title && (
-                            <div className="text-xs text-gray-500">{doc.metadata.title}</div>
+                            <div className="text-xs text-gray-500 truncate">{doc.metadata.title}</div>
                           )}
                         </div>
                       </div>
@@ -343,10 +355,11 @@ export default function KnowledgeBaseDetailPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button
                         onClick={() => handleDelete(doc)}
-                        className="text-red-600 hover:text-red-900 transition-colors"
+                        className="inline-flex items-center space-x-1 px-3 py-1.5 text-red-600 hover:text-white hover:bg-red-600 border border-red-600 rounded-lg transition-all duration-200"
                         title="删除文档"
                       >
-                        <TrashIcon className="w-5 h-5" />
+                        <TrashIcon className="w-4 h-4" />
+                        <span className="text-sm font-medium">删除</span>
                       </button>
                     </td>
                   </tr>
