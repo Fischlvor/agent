@@ -75,7 +75,18 @@ class ConnectionManager:
                 await self.disconnect(user_id)
                 raise
 
-    async def notify_document_status(self, user_id: str, kb_id: int, doc_id: int, status: str, error_msg: str = None):
+    async def notify_document_status(
+        self,
+        user_id: str,
+        kb_id: int,
+        doc_id: int,
+        status: str,
+        error_msg: str = None,
+        filesize: int = None,
+        page_count: int = None,
+        chunk_count: int = None,
+        parent_chunk_count: int = None
+    ):
         """通知文档状态更新（统一格式）
 
         Args:
@@ -84,13 +95,21 @@ class ConnectionManager:
             doc_id: 文档ID
             status: 文档状态 (pending/processing/completed/failed)
             error_msg: 错误信息（可选）
+            filesize: 文件大小（可选）
+            page_count: 页数（可选）
+            chunk_count: 向量数（可选）
+            parent_chunk_count: 父块数（可选）
         """
         # 使用统一的WebSocket消息格式
         event_data = {
             "kb_id": kb_id,
             "doc_id": doc_id,
             "status": status,
-            "error_msg": error_msg
+            "error_msg": error_msg,
+            "filesize": filesize,
+            "page_count": page_count,
+            "chunk_count": chunk_count,
+            "parent_chunk_count": parent_chunk_count
         }
 
         message = {

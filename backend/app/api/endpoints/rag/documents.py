@@ -1,12 +1,19 @@
 """文档管理和检索 API"""
 
+import asyncio
+import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
+
 from app.db import get_db
+from app.db.session import SESSION_LOCAL
 from app.models.user import User
+from app.models.rag import DocumentStatus
 from app.middleware.auth import get_current_user
 from app.services.rag import KnowledgeService, RetrievalService
 from app.schemas.rag import (
@@ -19,12 +26,54 @@ from app.schemas.rag import (
 
 router = APIRouter()
 
+# 用于执行后台任务的线程池
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+def _run_async_in_thread(doc_id: int, user_id: int, kb_id: int):
+    """在独立线程的新事件循环中执行异步任务
+
+    Args:
+        doc_id: 文档ID
+        user_id: 用户ID
+        kb_id: 知识库ID
+    """
+    async def _async_process():
+        db = SESSION_LOCAL()
+        try:
+            service = KnowledgeService(db)
+            await service.process_document(doc_id, user_id, kb_id)
+        except Exception as e:
+            logger.error("后台文档处理失败: doc_id=%s, error=%s", doc_id, str(e), exc_info=True)
+        finally:
+            db.close()
+
+    # 在新的事件循环中运行异步任务
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_async_process())
+    finally:
+        loop.close()
+
+
+def _process_document_background(doc_id: int, user_id: int, kb_id: int):
+    """后台任务包装函数：在线程池中执行文档处理
+
+    Args:
+        doc_id: 文档ID
+        user_id: 用户ID
+        kb_id: 知识库ID
+    """
+    # 提交到线程池异步执行，不等待结果
+    _executor.submit(_run_async_in_thread, doc_id, user_id, kb_id)
+
 
 @router.post("/{kb_id}/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     kb_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -60,16 +109,35 @@ async def upload_document(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 创建文档记录
+        # 创建文档记录（状态：PENDING）
         doc = await service.upload_document(
             kb_id=kb_id,
             file_path=str(file_path),
             filename=file.filename
         )
 
-        # 后台处理文档（解析、分块、向量化）
-        if background_tasks:
-            background_tasks.add_task(service.process_document, doc.id, current_user.id, kb_id)
+        # 立即更新为 PROCESSING 状态
+        doc.status = DocumentStatus.PROCESSING
+        db.commit()
+        db.refresh(doc)
+
+        # 推送 PROCESSING 状态到前端（通过 WebSocket）
+        from app.api.endpoints.chat_ws import manager
+        try:
+            await manager.notify_document_status(
+                user_id=str(current_user.id),
+                kb_id=kb_id,
+                doc_id=doc.id,
+                status='processing'
+            )
+            logger.info("推送 PROCESSING 状态: doc_id=%s, user_id=%s", doc.id, current_user.id)
+        except Exception:  # noqa: S110
+            # WebSocket 推送失败不影响主流程（用户可能未连接 WebSocket）
+            logger.debug("WebSocket 推送失败（用户可能未连接）: doc_id=%s", doc.id)
+
+        # 添加后台处理任务（解析、分块、向量化）
+        # ✅ 使用独立的数据库 session，避免与主请求的 session 冲突
+        background_tasks.add_task(_process_document_background, doc.id, current_user.id, kb_id)
 
         return DocumentUploadResponse(
             doc_id=doc.id,

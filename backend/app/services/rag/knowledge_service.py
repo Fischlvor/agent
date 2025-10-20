@@ -281,9 +281,12 @@ class KnowledgeService:
 
             self.db.commit()
 
+            # 刷新 doc 对象以获取最新数据
+            self.db.refresh(doc)
+
             logger.info(f"✓ Document {doc_id} processed successfully!")
 
-            # WebSocket推送：处理完成
+            # WebSocket推送：处理完成（包含完整文档信息）
             if user_id and kb_id:
                 try:
                     manager = get_ws_manager()
@@ -291,7 +294,11 @@ class KnowledgeService:
                         user_id=str(user_id),
                         kb_id=kb_id,
                         doc_id=doc_id,
-                        status='completed'
+                        status='completed',
+                        filesize=doc.filesize,
+                        page_count=doc.page_count,
+                        chunk_count=doc.chunk_count,
+                        parent_chunk_count=doc.parent_chunk_count
                     )
                 except Exception as ws_err:
                     logger.warning(f"WebSocket通知失败: {ws_err}")
@@ -328,10 +335,11 @@ class KnowledgeService:
         skip: int = 0,
         limit: int = 100
     ) -> tuple[List[Document], int]:
-        """列出知识库的文档"""
+        """列出知识库的文档（按创建时间倒序）"""
         query = self.db.query(Document).filter(Document.kb_id == kb_id)
         total = query.count()
-        items = query.offset(skip).limit(limit).all()
+        # ✅ 按创建时间倒序，新上传的文档在最前面
+        items = query.order_by(Document.created_at.desc()).offset(skip).limit(limit).all()
         return items, total
 
     def delete_document(self, doc_id: int) -> bool:
