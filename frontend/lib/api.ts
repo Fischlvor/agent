@@ -301,13 +301,14 @@ class ApiClient {
    * 发送消息（HTTP POST）
    * 响应会通过 WebSocket 流式推送
    */
-  async sendMessage(sessionId: string, content: string, modelId?: string, parentMessageId?: string): Promise<ChatMessage> {
+  async sendMessage(sessionId: string, content: string, modelId?: string, parentMessageId?: string, kbId?: number): Promise<ChatMessage> {
     const response = await this.client.post<ChatMessage>(
       `/chat/sessions/${sessionId}/messages`,
       {
         content,
         model_id: modelId,
-        parent_message_id: parentMessageId
+        parent_message_id: parentMessageId,
+        kb_id: kbId  // ✅ 传递知识库ID
       }
     );
     return response.data;

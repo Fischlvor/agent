@@ -15,7 +15,8 @@ export default function ChatPage() {
     isInitialized,
     initialize,
     createSession,
-    setPendingMessage
+    setPendingMessage,
+    setPendingKbId
   } = useChatStore();
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -44,7 +45,7 @@ export default function ChatPage() {
   }, [_hasHydrated, isAuthenticated, isInitialized, initialize, router]);
 
   // ✅ 处理发送消息（创建会话 + 保存消息 + 跳转）
-  const handleSendMessage = async (content: string) => {
+  const handleSendMessage = async (content: string, kbId?: number | null) => {
     try {
       // 1. 创建新会话
       const newSession = await createSession();
@@ -53,8 +54,9 @@ export default function ChatPage() {
         throw new Error('Failed to create session');
       }
 
-      // 2. 保存待发送的消息
+      // 2. 保存待发送的消息和知识库ID
       setPendingMessage(content);
+      setPendingKbId(kbId || null);
 
       // 3. 跳转到会话详情页（selectSession 会自动检测并发送）
       router.push(`/chat/${newSession.session_id}`);

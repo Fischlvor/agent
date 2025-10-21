@@ -96,6 +96,7 @@ class MessageCreate(BaseModel):
     content: str = Field(..., description="消息内容")
     model_id: Optional[str] = Field(None, description="使用的模型ID")
     parent_message_id: Optional[UUID] = Field(None, description="父消息ID（用于编辑消息时的关联）")
+    kb_id: Optional[int] = Field(None, description="知识库ID（用于RAG检索）")
 
 
 class MessageUpdate(BaseModel):

@@ -15,6 +15,7 @@ from app.ai.mcp.protocol import (
 from app.ai.tools.general.calculator import CalculatorTool
 from app.ai.tools.general.search import SearchTool
 from app.ai.tools.general.weather import WeatherTool
+from app.ai.tools.general.knowledge_search import KnowledgeSearchTool
 
 LOGGER = logging.getLogger(__name__)
 
@@ -257,6 +258,133 @@ class SearchMCPServer(InProcessMCPServer):
             )
 
 
+class KnowledgeSearchMCPServer(InProcessMCPServer):
+    """知识库检索 MCP 服务器"""
+
+    def __init__(self):
+        super().__init__(name="knowledge-search-server", version="1.0.0")
+        self.knowledge_search = KnowledgeSearchTool()
+
+    async def get_tools(self) -> List[ToolDefinition]:
+        """返回知识库检索工具定义（动态获取知识库列表）"""
+        # 从 KnowledgeSearchTool 获取参数定义
+        params = KnowledgeSearchTool.get_parameters()
+
+        # 构建 inputSchema
+        properties = {}
+        required = []
+
+        for param_name, param_info in params.items():
+            prop_type = "string"
+            if param_info.type in ["int", "integer"]:
+                prop_type = "integer"
+            elif param_info.type in ["float", "number"]:
+                prop_type = "number"
+
+            properties[param_name] = {
+                "type": prop_type,
+                "description": param_info.description
+            }
+
+            if param_info.required:
+                required.append(param_name)
+
+        # 动态生成工具描述（包含可用知识库列表）
+        description = await self._build_tool_description()
+
+        return [
+            ToolDefinition(
+                name="search_knowledge_base",
+                description=description,
+                inputSchema={
+                    "type": "object",
+                    "properties": properties,
+                    "required": required
+                }
+            )
+        ]
+
+    async def _build_tool_description(self) -> str:
+        """动态构建工具描述，包含可用知识库列表"""
+        base_description = KnowledgeSearchTool.get_description()
+
+        # 尝试获取知识库列表
+        try:
+            from app.ai.context import get_current_db_session
+            db = get_current_db_session()
+
+            if db is not None:
+                from app.models.rag import KnowledgeBase
+
+                # 查询所有知识库
+                kbs = db.query(KnowledgeBase).order_by(KnowledgeBase.id).all()
+
+                if kbs:
+                    kb_list = "\n\nAvailable knowledge bases:\n"
+                    for kb in kbs:
+                        kb_desc = kb.description or "No description"
+                        doc_count = kb.doc_count or 0
+                        kb_list += f"- kb_id={kb.id}: {kb.name} ({kb_desc}) - {doc_count} documents\n"
+
+                    return base_description + kb_list
+
+        except Exception as e:
+            LOGGER.warning(f"Failed to load knowledge base list: {e}")
+
+        # 如果无法获取知识库列表，返回基础描述
+        return base_description + "\n\nNote: Specify kb_id parameter to search a specific knowledge base."
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> ToolCallResult:
+        """执行知识库检索工具"""
+        if name != "search_knowledge_base":
+            return ToolCallResult(
+                content=[{
+                    "type": "text",
+                    "text": f"Unknown tool: {name}"
+                }],
+                isError=True
+            )
+
+        try:
+            query = arguments.get("query")
+            kb_id = arguments.get("kb_id")
+            top_k = arguments.get("top_k", 5)
+
+            if not query:
+                raise ValueError("Missing 'query' parameter")
+            if not kb_id:
+                raise ValueError("Missing 'kb_id' parameter")
+
+            # 调用知识库检索工具
+            result = await self.knowledge_search.execute(
+                query=query,
+                kb_id=int(kb_id),
+                top_k=int(top_k)
+            )
+
+            # 格式化输出
+            import json
+            result_text = json.dumps(result, ensure_ascii=False, indent=2)
+
+            return ToolCallResult(
+                content=[{
+                    "type": "text",
+                    "text": result_text
+                }],
+                isError=False
+            )
+
+        except Exception as e:
+            LOGGER.error(f"Knowledge search error: {e}")
+            return ToolCallResult(
+                content=[{
+                    "type": "text",
+                    "text": f"知识库检索错误: {str(e)}"
+                }],
+                isError=True
+            )
+
+
 # ============ 工厂函数 ============
 
 async def create_all_mcp_servers() -> Dict[str, InProcessMCPServer]:
@@ -270,6 +398,7 @@ async def create_all_mcp_servers() -> Dict[str, InProcessMCPServer]:
         "calculator": CalculatorMCPServer(),
         "weather": WeatherMCPServer(),
         "search": SearchMCPServer(),
+        "knowledge_search": KnowledgeSearchMCPServer(),  # ✅ RAG 知识库检索工具
     }
 
     LOGGER.info(f"Created {len(servers)} MCP servers")
