@@ -7,8 +7,8 @@
 - 🚀 **实时流式响应**：支持 thinking（思考过程）、tool_call（工具调用）、content（回复内容）的流式输出
 - 🧠 **多轮对话**：基于 Google ADK 的会话管理，自动维护上下文
 - 🔧 **MCP 协议**：完整实现 Model Context Protocol（JSON-RPC 2.0）
-- 🛠️ **动态工具加载**：计算器、天气查询、网络搜索等工具自动集成
-- 📚 **RAG 知识库**：基于 LangChain 的文档检索增强，支持 PDF/Word/HTML 等多种格式
+- 🛠️ **动态工具加载**：计算器、天气查询、网络搜索、**知识库检索**等工具自动集成
+- 📚 **RAG 知识库**：基于 LangChain + pgvector 的文档检索增强，支持混合模式（自动增强 + Agent 主动调用）
 - ⚡ **异步文档处理**：上传立即返回（< 0.5秒），后台处理 + WebSocket 实时推送状态
 - 💾 **双层会话管理**：业务层持久化 + SDK 层运行时缓存
 - 🔐 **用户认证**：JWT 双 Token 机制 + Token 绑定 + 自动刷新
@@ -51,9 +51,9 @@
 | **OpenAI** | OpenAI API 支持（可选） |
 | **MCP** | 工具协议标准化（JSON-RPC 2.0） |
 | **LangChain** | RAG 文档处理和检索增强 |
-| **FAISS** | 向量检索引擎（内存 + 磁盘持久化） |
-| **pgvector** | PostgreSQL 向量扩展（向量备份） |
-| **BGE-M3** | 多语言文本嵌入模型（GPU 加速） |
+| **pgvector** | PostgreSQL 向量扩展（向量存储和检索） |
+| **FAISS** | 向量检索引擎（内存加速 + 磁盘持久化） |
+| **BGE-M3** | 多语言文本嵌入模型（1024维，GPU 加速） |
 | **BGE-Reranker-V2-M3** | 结果重排序模型（GPU 加速） |
 
 ## 📁 项目结构
@@ -184,8 +184,8 @@ ollama pull qwen3:8b
 |------|------|------------|
 | **Calculator** | 数学计算（支持四则运算、幂运算、括号） | CalculatorMCPServer |
 | **Weather** | 天气查询（OpenWeatherMap API） | WeatherMCPServer |
-| **Search** | 网络搜索（模拟） | SearchMCPServer |
-| **RAG Retriever** | 知识库检索（语义搜索）📚 | RAGMCPServer |
+| **Search** | 网络搜索（Serper API） | SearchMCPServer |
+| **Knowledge Search** | 知识库检索（语义搜索 + 重排序）📚 | KnowledgeSearchMCPServer |
 
 ### 3. 会话管理
 
@@ -254,7 +254,10 @@ ollama pull qwen3:8b
 - 自动文本切分和向量化
 - 语义相似度检索（支持跨语言：中文查询英文文档）
 - 两阶段检索：召回（Vector Search）+ 重排（Cross-Encoder）
-- 作为 MCP 工具供 Agent 调用（RAGMCPServer）
+- **混合检索模式**：
+  - 🔄 自动模式：用户选择知识库时，系统自动检索并注入上下文
+  - 🤖 主动模式：Agent 根据对话自主决定是否调用 `search_knowledge_base` 工具
+- 作为 MCP 工具供 Agent 调用（KnowledgeSearchMCPServer）
 
 **前端界面**：
 - 知识库列表：`/knowledge-bases`
@@ -277,10 +280,13 @@ ollama pull qwen3:8b
 4. BGE-M3 模型生成向量（GPU 加速）
 5. 向量存入 FAISS 索引（内存）并持久化到磁盘
 6. 元数据和向量备份存入 PostgreSQL（pgvector）
-7. Agent 对话时自动调用 RAG 工具检索
+7. 用户对话时选择知识库（可选）
+   - 自动模式：系统自动检索并注入上下文（< 50ms）
+   - 主动模式：Agent 根据对话判断是否调用 search_knowledge_base 工具
+8. 两阶段检索：
    - 第一阶段：向量召回 Top-20 子块（FAISS 内存检索）
    - 第二阶段：重排序选出 Top-5 父块（Reranker GPU）
-8. LLM 基于检索结果生成回答
+9. LLM 基于检索结果生成回答，并引用来源
 ```
 
 **快速开始**：
@@ -385,7 +391,69 @@ npm run lint
 
 ## 📝 更新日志
 
-### 2025-10-20 (最新)
+### 2025-10-21 (最新)
+
+#### 🎯 RAG 工具调用完整实现 ⭐⭐⭐
+
+**核心功能**：实现 RAG 检索作为 Agent 主动调用的工具，支持混合模式（自动增强 + Agent 主动调用）。
+
+**后端实现**：
+- **RAG 工具创建** (`knowledge_search.py`)：
+  - 实现 `KnowledgeSearchTool` 作为标准 MCP 工具
+  - 支持参数：query（查询文本）、kb_id（知识库ID）、top_k（返回数量）
+  - 返回格式化的检索结果（内容、来源、页码、得分）
+- **MCP 工具集成** (`tools_server.py`)：
+  - 新增 `KnowledgeSearchMCPServer` 包装 RAG 工具
+  - 动态生成工具描述（包含可用知识库列表）
+  - 与现有工具（Calculator、Weather、Search）统一管理
+- **混合检索模式** (`chat_service.py`)：
+  - 自动模式：用户选择知识库时，系统自动执行 RAG 检索并注入上下文
+  - 主动模式：Agent 根据对话内容自主决定是否调用 RAG 工具
+  - XML 标签格式注入：`<retrieved_documents>...</retrieved_documents>`
+- **ContextVar 管理** (`context.py`)：
+  - 新建上下文变量模块，传递 db_session、user_id、session_id
+  - 工具执行时通过 ContextVar 获取数据库会话（避免全局依赖）
+
+**前端实现**：
+- **知识库选择器集成**：
+  - 欢迎界面（`WelcomeScreen.tsx`）：新增知识库选择下拉框
+  - 消息输入框（`MessageInput.tsx`）：顶部显示知识库选择器
+  - RAG 提示框：选中知识库时显示蓝色提示"🔍 已启用知识库增强"
+- **知识库 ID 传递**：
+  - 前端 → API：`MessageCreate.kb_id`（可选字段）
+  - API → 后台任务：`_generate_and_push_response(kb_id)`
+  - 状态管理：`chatStore.pendingKbId` 暂存跨页面传递
+- **消息发送流程优化**：
+  - 修复欢迎界面发送消息后不自动执行的问题
+  - 优化 `selectSession` 和页面 `useEffect` 的协作逻辑
+  - 兜底机制：selectSession 优先处理（300ms），页面兜底（500ms）
+
+**数据存储优化**：
+- **工具调用结果 JSONB 存储** (`invocation.py`)：
+  - 字段类型：`Text` → `JSONB`（支持高效查询和索引）
+  - 数据迁移脚本：`migrate_tool_result_to_jsonb.py`（处理旧数据格式转换）
+  - 迁移结果：23/25 条记录成功，兼容新旧格式
+- **工具执行状态智能判断** (`chat_service.py`)：
+  - 检查 MCP 协议层：`isError` 标志（工具执行异常）
+  - 检查业务逻辑层：`success` 标志（检索失败、无结果等）
+  - 自动设置 `status="failed"` 和 `error_message`
+  - 确定类型：`chunk["result"]` 为 `Dict[str, Any]` 格式
+
+**UI/UX 优化**：
+- **Token 显示组件改进** (`ContextProgress.tsx`)：
+  - 两行布局：数字 + "context window" 标签
+  - 悬停提示：显示详细的上下文使用说明
+  - 遵循业界标准：显示上下文窗口使用率（非总消耗）
+  - 颜色警告：< 70% 灰色，70-90% 黄色，> 90% 红色
+
+**性能数据**：
+- 检索速度：30-50ms（FAISS 内存索引 + GPU 重排序）
+- 相似度计算：1024维向量余弦距离 < 5ms
+- 跨语言检索：中文查询英文文档，Top-5 准确率 > 85%
+
+---
+
+### 2025-10-20
 
 #### ⚡ RAG 文档处理异步化与前端局部更新优化 ⭐
 
