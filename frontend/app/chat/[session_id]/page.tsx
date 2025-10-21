@@ -22,13 +22,15 @@ export default function ChatSessionPage() {
     error,
     currentSession,
     pendingMessage,
+    pendingKbId,
     deletingSessionId,
     isInitialized,
     initialize,
     disconnect,
     selectSession,
     sendMessage,
-    setPendingMessage
+    setPendingMessage,
+    setPendingKbId
   } = useChatStore();
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -81,23 +83,32 @@ export default function ChatSessionPage() {
     }
   }, [isInitialized, sessionId, currentSession, deletingSessionId, selectSession, router]);
 
-  // ✅ 处理待发送消息（针对从欢迎页面创建会话的情况）
+  // ✅ 处理待发送消息由 selectSession 自动处理，这里作为备用
+  // 只在特殊情况下（selectSession 未触发）才执行
   useEffect(() => {
     if (!pendingMessage) return;
     if (!currentSession) return;
     if (currentSession.session_id !== sessionId && currentSession.id !== sessionId) return;
     if (status !== 'connected') return;
 
-    console.log('[ChatSessionPage] 检测到待发送消息，准备发送');
+    // 检查 selectSession 是否已经清空了 pendingMessage（说明已经处理了）
+    // 如果 pendingMessage 还在，说明 selectSession 没有处理，这里作为兜底
+    console.log('[ChatSessionPage] 兜底逻辑：检测到待发送消息', { kbId: pendingKbId });
 
-    // 延迟一点确保页面渲染完成
+    // 延迟一点确保页面渲染完成，并避免与 selectSession 的延迟冲突
     const timer = setTimeout(() => {
-      setPendingMessage(null); // 清空待发送消息
-      sendMessage(pendingMessage);
-    }, 300);
+      // 再次检查，避免重复发送（selectSession 可能已经处理了）
+      const { pendingMessage: stillPending } = useChatStore.getState();
+      if (stillPending) {
+        console.log('[ChatSessionPage] 执行兜底发送');
+        setPendingMessage(null); // 清空待发送消息
+        setPendingKbId(null); // 清空待发送知识库ID
+        sendMessage(pendingMessage, undefined, pendingKbId);
+      }
+    }, 500); // 延迟比 selectSession 长，让 selectSession 优先处理
 
     return () => clearTimeout(timer);
-  }, [pendingMessage, currentSession, sessionId, status, sendMessage, setPendingMessage]);
+  }, [pendingMessage, pendingKbId, currentSession, sessionId, status, sendMessage, setPendingMessage, setPendingKbId]);
 
   // ✅ 检测会话是否加载失败（error 状态且没有 currentSession）
   useEffect(() => {

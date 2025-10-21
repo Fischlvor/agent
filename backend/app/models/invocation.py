@@ -68,7 +68,7 @@ class ToolInvocation(Base):
     triggered_by_llm_sequence = Column(Integer, nullable=True, comment="由第几次LLM调用触发")
     tool_name = Column(String(100), nullable=False, comment="工具名称")
     arguments = Column(JSONB, nullable=True, comment="输入参数")
-    result = Column(Text, nullable=True, comment="执行结果")
+    result = Column(JSONB, nullable=True, comment="执行结果（JSON格式）")
     status = Column(String(20), nullable=False, comment="执行状态")
     cache_hit = Column(Boolean, nullable=False, default=False, comment="是否命中缓存")
     error_message = Column(Text, nullable=True, comment="错误信息")

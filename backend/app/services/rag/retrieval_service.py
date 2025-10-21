@@ -52,6 +52,7 @@ class RetrievalService:
 
         # 1.1 将查询文本转换为向量
         query_embedding = self.embeddings.embed_query(query)
+        logger.info(f"🔍 query_embedding类型={type(query_embedding)}, 维度={len(query_embedding)}, 前5值={query_embedding[:5]}")
 
         # 1.2 使用 pgvector 的余弦相似度搜索（1 - 余弦距离 = 余弦相似度）
         # pgvector 的 <=> 操作符计算余弦距离，需要转换为相似度
@@ -68,17 +69,21 @@ class RetrievalService:
             FROM document_chunks dc
             JOIN documents d ON dc.doc_id = d.id
             WHERE d.kb_id = :kb_id
-                AND dc.chunk_type = 'child'
+                AND dc.chunk_type = 'CHILD'
                 AND dc.embedding IS NOT NULL
                 AND 1 - (dc.embedding <=> :query_embedding) >= :threshold
             ORDER BY dc.embedding <=> :query_embedding
             LIMIT :limit
         """)
 
+        query_embedding_str = str(query_embedding)
+        logger.info(f"🔍 query_embedding字符串格式: {query_embedding_str[:100]}...")
+        logger.info(f"🔍 查询参数: kb_id={kb_id}, threshold={similarity_threshold}, limit={top_k_recall}")
+
         result = self.db.execute(
             sql,
             {
-                "query_embedding": str(query_embedding),  # pgvector 接受字符串格式的向量
+                "query_embedding": query_embedding_str,  # pgvector 接受字符串格式的向量
                 "kb_id": kb_id,
                 "threshold": similarity_threshold,
                 "limit": top_k_recall
@@ -88,7 +93,7 @@ class RetrievalService:
         child_results = result.fetchall()
 
         if not child_results:
-            logger.info(f"未找到相关内容 (kb_id={kb_id})")
+            logger.warning(f"❌ 未找到相关内容 (kb_id={kb_id}, threshold={similarity_threshold})")
             return [], int((time.time() - start_time) * 1000)
 
         logger.info(f"召回 {len(child_results)} 个子块")

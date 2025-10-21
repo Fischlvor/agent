@@ -1,15 +1,20 @@
 'use client';
 
 import { useState } from 'react';
+import { useChatStore } from '@/store/chatStore';
 import ModelSelector from './ModelSelector';
+import { BookOpenIcon } from '@heroicons/react/24/outline';
 
 interface WelcomeScreenProps {
-  onSendMessage: (content: string) => Promise<void>;
+  onSendMessage: (content: string, kbId?: number | null) => Promise<void>;
 }
 
 export default function WelcomeScreen({ onSendMessage }: WelcomeScreenProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedKbId, setSelectedKbId] = useState<number | null>(null);
+  const [showKbSelector, setShowKbSelector] = useState(false);
+  const { knowledgeBases } = useChatStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +22,7 @@ export default function WelcomeScreen({ onSendMessage }: WelcomeScreenProps) {
 
     setIsLoading(true);
     try {
-      await onSendMessage(input.trim());
+      await onSendMessage(input.trim(), selectedKbId);
       setInput('');
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -65,6 +70,79 @@ export default function WelcomeScreen({ onSendMessage }: WelcomeScreenProps) {
         <div className="flex justify-center mb-6">
           <ModelSelector />
         </div>
+
+        {/* 知识库选择器 */}
+        {knowledgeBases.length > 0 && (
+          <div className="mb-4 flex items-center justify-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowKbSelector(!showKbSelector)}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${
+                selectedKbId
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-gray-300 hover:border-gray-400 text-gray-700'
+              }`}
+            >
+              <BookOpenIcon className="w-5 h-5" />
+              <span className="text-sm font-medium">
+                {selectedKbId
+                  ? knowledgeBases.find((kb) => kb.id === selectedKbId)?.name || '选择知识库'
+                  : '选择知识库'}
+              </span>
+            </button>
+
+            {selectedKbId && (
+              <button
+                type="button"
+                onClick={() => setSelectedKbId(null)}
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                清除
+              </button>
+            )}
+
+            {showKbSelector && (
+              <div className="absolute z-10 mt-2 bg-white border-2 border-gray-200 rounded-lg shadow-lg p-2 min-w-[300px] max-h-[300px] overflow-y-auto">
+                <div className="text-xs text-gray-500 px-3 py-2 font-medium">选择知识库</div>
+                {knowledgeBases.map((kb) => (
+                  <button
+                    key={kb.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedKbId(kb.id);
+                      setShowKbSelector(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded hover:bg-gray-100 transition-colors ${
+                      selectedKbId === kb.id ? 'bg-blue-50 text-blue-700' : ''
+                    }`}
+                  >
+                    <div className="font-medium text-sm">{kb.name}</div>
+                    {kb.description && (
+                      <div className="text-xs text-gray-500 truncate">{kb.description}</div>
+                    )}
+                    <div className="text-xs text-gray-400 mt-1">
+                      {kb.doc_count} 文档 · {kb.chunk_count} 向量
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* RAG提示 */}
+        {selectedKbId && (
+          <div className="mb-4 flex items-center justify-center space-x-2 text-xs text-blue-600 bg-blue-50 rounded-lg py-2 px-3">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>
+              已启用 RAG 检索 • AI 将搜索{' '}
+              <strong>{knowledgeBases.find(kb => kb.id === selectedKbId)?.name}</strong>{' '}
+              中的相关内容来回答问题
+            </span>
+          </div>
+        )}
 
         {/* 输入框 */}
         <form onSubmit={handleSubmit} className="relative">

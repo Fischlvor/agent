@@ -26,7 +26,8 @@ export default function MessageInput() {
     e.preventDefault();
     if (!input.trim() || isGenerating) return;
 
-    sendMessage(input.trim());
+    // ✅ 传递知识库ID
+    sendMessage(input.trim(), undefined, selectedKbId);
     setInput('');
 
     // 重置文本框高度
@@ -188,6 +189,20 @@ export default function MessageInput() {
           按 Cmd/Ctrl + Enter 快速发送 • 支持 Markdown 格式
           {knowledgeBases.length > 0 && ' • 可选择知识库进行 RAG 检索'}
         </div>
+
+        {/* RAG检索提示 */}
+        {selectedKbId && (
+          <div className="mt-2 flex items-center justify-center space-x-2 text-xs text-blue-600 bg-blue-50 rounded-lg py-2 px-3">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>
+              已启用 RAG 检索 • AI 将搜索{' '}
+              <strong>{knowledgeBases.find(kb => kb.id === selectedKbId)?.name}</strong>{' '}
+              中的相关内容来回答问题
+            </span>
+          </div>
+        )}
       </form>
     </div>
   );
