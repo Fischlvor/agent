@@ -228,6 +228,9 @@ async def send_message(
     chat_service = ChatService(db)
     user_id = str(current_user.id)
 
+    # ✅ 调试日志：检查kb_id
+    LOGGER.info(f"📨 收到消息请求: content='{request.content[:50]}...', kb_id={request.kb_id}")
+
     # 创建用户消息
     user_message = chat_service.create_user_message(
         session_id=session_id,
@@ -244,7 +247,8 @@ async def send_message(
         session_id=session_id,
         user=current_user,
         content=request.content,
-        model_id=request.model_id
+        model_id=request.model_id,
+        kb_id=request.kb_id  # ✅ 传递知识库ID
     )
 
     return user_message
@@ -255,7 +259,8 @@ async def _generate_and_push_response(
     session_id: str,
     user: User,
     content: str,
-    model_id: Optional[str] = None
+    model_id: Optional[str] = None,
+    kb_id: Optional[int] = None
 ):
     """后台任务：生成响应并推送到WebSocket
 
@@ -283,7 +288,8 @@ async def _generate_and_push_response(
             user=user,
             content=content,
             model_id=model_id,
-            skip_user_message=True  # 用户消息已经创建了
+            skip_user_message=True,  # 用户消息已经创建了
+            kb_id=kb_id  # ✅ 传递知识库ID
         ):
             # 检查停止标志
             if manager.check_stop_generation(user_id, str(session_id)):

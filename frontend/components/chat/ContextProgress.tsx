@@ -38,7 +38,10 @@ export default function ContextProgress({ currentTokens, maxTokens }: ContextPro
   const color = getColor();
 
   return (
-    <div className="flex items-center space-x-2">
+    <div
+      className="flex items-center space-x-2 group cursor-help"
+      title={`上下文窗口使用情况: ${animatedTokens.toLocaleString()} / ${maxTokens.toLocaleString()} tokens (${percentage.toFixed(1)}%)\n\n当前对话消耗的tokens会占用模型的上下文窗口。\n接近100%时建议开始新对话。`}
+    >
       {/* 圆形进度条 */}
       <div className="relative" style={{ width: size, height: size }}>
         <svg
@@ -83,21 +86,25 @@ export default function ContextProgress({ currentTokens, maxTokens }: ContextPro
       </div>
 
       {/* Token信息 */}
-      <div className="flex items-center space-x-1 text-sm text-gray-600">
-        <span className={`font-medium ${
-          percentage > 90
-            ? 'text-red-600'
-            : percentage > 70
-            ? 'text-amber-600'
-            : 'text-gray-700'
-        }`}>
-          {(animatedTokens / 1000).toFixed(1)}K
-        </span>
-        <span className="text-gray-400">/</span>
-        <span className="text-gray-600">
-          {(maxTokens / 1000).toFixed(0)}K
-        </span>
-        <span className="text-gray-500">context used</span>
+      <div className="flex flex-col">
+        <div className="flex items-center space-x-1 text-sm text-gray-600">
+          <span className={`font-medium ${
+            percentage > 90
+              ? 'text-red-600'
+              : percentage > 70
+              ? 'text-amber-600'
+              : 'text-gray-700'
+          }`}>
+            {(animatedTokens / 1000).toFixed(1)}K
+          </span>
+          <span className="text-gray-400">/</span>
+          <span className="text-gray-600">
+            {(maxTokens / 1000).toFixed(0)}K
+          </span>
+        </div>
+        <div className="text-xs text-gray-400">
+          context window
+        </div>
       </div>
     </div>
   );

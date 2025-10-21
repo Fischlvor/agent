@@ -49,7 +49,7 @@ class RerankerService:
         Args:
             query: 查询文本
             texts: 候选文本列表
-            normalize: 是否归一化分数到 [0, 1]
+            normalize: 是否归一化分数到 [0, 1]（注：目前FlagReranker不支持此参数，已移除）
 
         Returns:
             重排分数列表
@@ -60,8 +60,8 @@ class RerankerService:
         # 构造输入对
         pairs = [[query, text] for text in texts]
 
-        # 计算分数
-        scores = self.reranker.compute_score(pairs, normalize=normalize)
+        # 计算分数（FlagReranker不支持normalize参数）
+        scores = self.reranker.compute_score(pairs)
 
         # 确保返回列表
         if isinstance(scores, float):

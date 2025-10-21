@@ -41,6 +41,7 @@ interface ChatState {
   messages: ChatMessage[];
   streamingMessage: StreamingMessage | null;
   pendingMessage: string | null; // ✅ 待发送的消息（用于跳转后自动发送）
+  pendingKbId: number | null; // ✅ 待发送消息的知识库ID
 
   // 知识库
   knowledgeBases: any[]; // ✅ 缓存知识库列表
@@ -64,11 +65,12 @@ interface ChatState {
 
   // 消息管理
   loadMessages: (sessionId: string) => Promise<void>;
-  sendMessage: (content: string, parentMessageId?: string) => void;
+  sendMessage: (content: string, parentMessageId?: string, kbId?: number | null) => void;
   stopGeneration: () => void;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   editMessageAndRegenerate: (messageId: string, newContent: string) => Promise<void>;
   setPendingMessage: (message: string | null) => void; // ✅ 设置待发送消息
+  setPendingKbId: (kbId: number | null) => void; // ✅ 设置待发送消息的知识库ID
 
   // 知识库管理
   loadKnowledgeBases: () => Promise<void>; // ✅ 加载知识库列表
@@ -99,6 +101,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   streamingMessage: null,
   pendingMessage: null, // ✅ 待发送消息
+  pendingKbId: null, // ✅ 待发送消息的知识库ID
   knowledgeBases: [], // ✅ 知识库列表
 
   // ============ 连接管理 ============
@@ -276,13 +279,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
 
       // ✅ 检查是否有待发送的消息，如果有则自动发送
-      const { pendingMessage } = get();
+      const { pendingMessage, pendingKbId } = get();
       if (pendingMessage) {
-        console.log('[selectSession] 检测到待发送消息，准备自动发送');
-        set({ pendingMessage: null }); // 清空待发送消息
+        console.log('[selectSession] 检测到待发送消息，准备自动发送', { kbId: pendingKbId });
+        set({ pendingMessage: null, pendingKbId: null }); // 清空待发送消息和知识库ID
         // 延迟一下确保 WebSocket 连接就绪
         setTimeout(() => {
-          get().sendMessage(pendingMessage);
+          get().sendMessage(pendingMessage, undefined, pendingKbId);
         }, 300);
       }
     } catch (error: any) {
@@ -353,7 +356,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content: string, parentMessageId?: string) => {
+  sendMessage: async (content: string, parentMessageId?: string, kbId?: number | null) => {
     const { wsManager, currentSession, currentModel, messageTimeout } = get();
 
     if (!wsManager?.isConnected) {
@@ -379,7 +382,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         currentSession.session_id || currentSession.id,  // 优先使用session_id
         content,
         currentModel || undefined,
-        parentMessageId  // 传递父消息ID（用于编辑关联）
+        parentMessageId,  // 传递父消息ID（用于编辑关联）
+        kbId || undefined  // ✅ 传递知识库ID
       );
 
       // ✅ 添加用户消息到本地状态
@@ -1077,6 +1081,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ pendingMessage: message });
   },
 
+  setPendingKbId: (kbId: number | null) => {
+    set({ pendingKbId: kbId });
+  },
+
   // ============ 知识库管理 ============
 
   loadKnowledgeBases: async () => {
@@ -1116,6 +1124,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       streamingMessage: null,
       pendingMessage: null, // ✅ 也重置待发送消息
+      pendingKbId: null, // ✅ 也重置待发送知识库ID
       knowledgeBases: [] // ✅ 重置知识库
     });
   }

@@ -716,7 +716,8 @@ class ChatService:
         content: str,
         model_id: Optional[str] = None,
         skip_user_message: bool = False,
-        edited_message_id: Optional[str] = None
+        edited_message_id: Optional[str] = None,
+        kb_id: Optional[int] = None
     ) -> AsyncIterator[Dict]:
         """发送消息并流式返回AI回复
 
@@ -727,6 +728,7 @@ class ChatService:
             model_id: 模型ID（可选，不指定则使用会话默认模型）
             skip_user_message: 是否跳过创建用户消息（用于编辑后重新生成）
             edited_message_id: 编辑的消息ID（用于追踪和验证）
+            kb_id: 知识库ID（可选，用于RAG检索）
 
         Yields:
             WebSocket消息字典
@@ -919,6 +921,61 @@ class ChatService:
             system_prompt = session.system_prompt or DEFAULT_SYSTEM_PROMPT
             # 保存到缓存（24小时）
             redis_service.save_user_preference(str(user.id), "system_prompt", system_prompt, expire_seconds=86400)
+
+        # ✅ RAG检索增强（如果用户指定了知识库）
+        if kb_id:
+            try:
+                from app.services.rag.retrieval_service import RetrievalService
+
+                LOGGER.info(f"🔍 执行RAG检索: kb_id={kb_id}, query='{content[:50]}...'")
+
+                # 创建检索服务
+                retrieval_service = RetrievalService(self.db)
+
+                # 执行检索
+                results, search_time_ms = await retrieval_service.retrieve(
+                    query=content,
+                    kb_id=kb_id,
+                    top_k=3,  # 返回3个最相关的文档块
+                    top_k_recall=12,  # 召回12个候选
+                    similarity_threshold=0.2,  # 降低阈值以支持跨语言检索（中文查询+英文文档）
+                    use_rerank=True
+                )
+
+                if results:
+                    LOGGER.info(f"✅ RAG检索成功: 找到 {len(results)} 个相关文档，耗时 {search_time_ms}ms")
+
+                    # 构造RAG上下文（OpenAI/Claude风格：XML标签结构化）
+                    rag_context = "\n\n<retrieved_documents>\n"
+                    for i, doc in enumerate(results, 1):
+                        rag_context += f'<document index="{i}" source="{doc.source}" '
+                        if doc.page_number:
+                            rag_context += f'page="{doc.page_number}" '
+                        if doc.doc_title:
+                            rag_context += f'title="{doc.doc_title}" '
+                        rag_context += f'score="{doc.max_score:.2f}">\n'
+                        rag_context += f"{doc.parent_text}\n"
+                        rag_context += "</document>\n\n"
+
+                    rag_context += "</retrieved_documents>\n\n"
+                    rag_context += "When answering, cite sources using [1], [2], [3], etc. if relevant information comes from the retrieved documents.\n"
+
+                    # 将RAG上下文添加到系统提示词
+                    system_prompt = system_prompt + rag_context
+                    LOGGER.info(f"📝 已将RAG上下文添加到系统提示词 (长度: {len(rag_context)} 字符)")
+                else:
+                    LOGGER.info(f"ℹ️ RAG检索未找到相关文档 (kb_id={kb_id})")
+
+            except Exception as e:
+                # RAG检索失败不影响对话，只记录日志
+                LOGGER.error(f"❌ RAG检索失败: {e}", exc_info=True)
+
+        # ✅ 设置上下文变量（用于工具调用时访问数据库）
+        from app.ai.context import set_current_db_session, set_current_user_id, set_current_session_id
+
+        set_current_db_session(self.db)
+        set_current_user_id(user.id)
+        set_current_session_id(str(session_id))
 
         try:
             async for chunk in agent.run_streaming(
@@ -1180,9 +1237,43 @@ class ChatService:
                                         duration = (datetime.utcnow() - tool_start_times[start_time_key]).total_seconds()
                                         duration_ms = int(duration * 1000)
 
-                                    # 更新记录
-                                    invocation.result = str(chunk["result"]) if chunk["result"] else None
-                                    invocation.status = "success"
+                                    # 解析工具返回结果，检查实际状态
+                                    # chunk["result"] 类型: Dict[str, Any]
+                                    # 格式: {"content": [{"type": "text", "text": "..."}], "isError": bool}
+                                    tool_result = chunk["result"]
+                                    tool_status = "success"
+                                    error_msg = None
+
+                                    if tool_result:
+                                        # MCP协议返回格式: {"content": [...], "isError": bool}
+                                        # 检查isError标志
+                                        if isinstance(tool_result, dict):
+                                            if tool_result.get("isError"):
+                                                tool_status = "failed"
+                                                # 从content中提取错误信息
+                                                content_list = tool_result.get("content", [])
+                                                if content_list and isinstance(content_list, list):
+                                                    error_msg = content_list[0].get("text", "Unknown error")
+
+                                            # 尝试解析content中的JSON，检查业务层的success标志
+                                            content_list = tool_result.get("content", [])
+                                            if content_list and isinstance(content_list, list):
+                                                text_content = content_list[0].get("text", "")
+                                                try:
+                                                    inner_result = json.loads(text_content)
+                                                    if isinstance(inner_result, dict) and inner_result.get("success") is False:
+                                                        tool_status = "failed"
+                                                        error_msg = inner_result.get("error", error_msg or "Unknown error")
+                                                except (json.JSONDecodeError, ValueError, TypeError):
+                                                    pass
+
+                                        # 保存为JSONB格式
+                                        invocation.result = tool_result
+                                    else:
+                                        invocation.result = None
+
+                                    invocation.status = tool_status
+                                    invocation.error_message = error_msg
                                     invocation.duration_ms = duration_ms
 
                                     # 检查是否命中缓存（从result中判断）
@@ -1192,7 +1283,7 @@ class ChatService:
 
                                     LOGGER.info(
                                         f"✅ 更新工具调用记录: {invocation.tool_name} "
-                                        f"status=success, duration={duration_ms}ms"
+                                        f"status={tool_status}, duration={duration_ms}ms"
                                     )
                                 except Exception as e:
                                     LOGGER.error(f"更新工具调用记录失败: {e}", exc_info=True)
