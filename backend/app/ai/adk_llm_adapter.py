@@ -25,13 +25,20 @@ class ADKLlmAdapter(BaseLlm):
     # Pydantic 配置：允许额外字段和任意类型
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
 
-    def __init__(self, our_client: BaseAIClient, model_name: str = "custom", **kwargs):
+    def __init__(
+        self,
+        our_client: BaseAIClient,
+        model_name: str = "custom",
+        max_context_length: Optional[int] = None,
+        **kwargs
+    ):
         """
         初始化适配器
 
         Args:
             our_client: 我们的 LLM 客户端（QwenClient, OpenAIClient 等）
             model_name: 模型名称（用于标识）
+            max_context_length: 最大上下文长度（从模型表读取）
         """
         # 调用父类初始化
         super().__init__(model=model_name, **kwargs)
@@ -39,6 +46,11 @@ class ADKLlmAdapter(BaseLlm):
         # 通过 __dict__ 直接设置字段，绕过 Pydantic 验证
         object.__setattr__(self, 'our_client', our_client)
         object.__setattr__(self, 'model_name', model_name)
+        # ✅ 设置最大上下文长度，限制不超过32K
+        if max_context_length and max_context_length > 32768:
+            max_context_length = 32768
+            LOGGER.info(f"模型 {model_name} 的max_context_length超过32K，已限制为32768")
+        object.__setattr__(self, 'max_context_length', max_context_length or 16384)
 
     async def generate_content_async(
         self,
@@ -70,11 +82,21 @@ class ADKLlmAdapter(BaseLlm):
         accumulated_content = ""
         usage_metadata = None  # 用于保存 token 统计信息
 
+        # ✅ 设置Ollama选项（从模型表读取上下文窗口大小）
+        num_ctx = getattr(self, 'max_context_length', 16384)
+        LOGGER.info(f"🔧 使用上下文窗口: {num_ctx} tokens (模型: {self.model_name})")
+
+        ollama_options = {
+            "num_ctx": num_ctx,  # 上下文窗口（从数据库配置读取）
+            "temperature": 0.1,  # 降低随机性，让模型更严格遵循工具调用指令
+        }
+
         response = await self.our_client.chat(
             messages=our_messages,
             system_prompt=None,
             tools=our_tools,
             stream=True,
+            options=ollama_options,  # ✅ 传递选项
             **kwargs
         )
 
@@ -190,11 +212,19 @@ class ADKLlmAdapter(BaseLlm):
 
         # ============ 步骤 3：如果没有流式内容，返回完整响应（降级） ============
         if not accumulated_content:
+            # ✅ 设置Ollama选项（使用相同的上下文窗口）
+            num_ctx = getattr(self, 'max_context_length', 16384)
+            ollama_options = {
+                "num_ctx": num_ctx,  # 上下文窗口（从数据库配置读取）
+                "temperature": 0.1,  # 降低随机性，让模型更严格遵循工具调用指令
+            }
+
             our_response = await self.our_client.chat(
                 messages=our_messages,
                 system_prompt=None,
                 tools=None,
-                stream=False
+                stream=False,
+                options=ollama_options  # ✅ 传递选项
             )
             adk_response = self._convert_response_to_adk_format(our_response)
             yield adk_response

@@ -58,12 +58,12 @@ class KnowledgeSearchTool(BaseTool):
                 kb_id=kb_id,
                 top_k=top_k,
                 top_k_recall=top_k * 4,  # 召回数量是返回数量的4倍
-                similarity_threshold=0.2,  # 相似度阈值（降低以支持跨语言检索）
+                similarity_threshold=0.4,  # 相似度阈值（降低以支持跨语言检索）
                 use_rerank=True  # 使用重排序
             )
 
             if not results:
-                LOGGER.info("未找到相关文档 (kb_id=%d)", kb_id)
+                LOGGER.info("未找到相关内容 (kb_id=%d)", kb_id)
                 return {
                     "success": True,
                     "message": f"No relevant documents found in knowledge base {kb_id}",
@@ -104,7 +104,7 @@ class KnowledgeSearchTool(BaseTool):
 
                 documents.append(doc_dict)
 
-            LOGGER.info("检索成功: 找到 %d 个文档，耗时 %dms", len(documents), search_time_ms)
+            LOGGER.info("检索成功: 找到 %d 个父块，耗时 %dms", len(documents), search_time_ms)
 
             return {
                 "success": True,
@@ -127,11 +127,21 @@ class KnowledgeSearchTool(BaseTool):
     @classmethod
     def get_description(cls) -> str:
         """获取工具描述（会被动态更新知识库列表）"""
-        return """Search the knowledge base for relevant documents.
+        return """【必须使用】在知识库中搜索相关文档
 
-This tool retrieves documents from the knowledge base that are relevant to the user's query.
-Use this when the user asks about topics that might be covered in our documentation.
+⚠️ 强制使用规则：
+1. 用户询问文档、论文、研究、实验、模型、方法等专业内容 → 立即调用此工具
+2. 用户追问细节（"具体怎么做"、"有什么改进"、"对比结果"、"文中提到"、"原文"、"表格"）→ 立即重新调用
+3. 即使之前检索过相同主题，每次新问题都必须重新检索（用不同的查询词）
+4. 禁止依赖对话历史中的检索结果回答新问题
 
-The tool will return relevant document chunks with their sources and page numbers.
-Cite the sources when using information from the retrieved documents."""
+💡 查询词优化技巧：
+- 用户问"改进" → 查询词包含 "改进 优化 方法"
+- 用户问"对比" → 查询词包含 "对比 实验 性能 表格"
+- 用户问"原文"、"文中" → 查询词包含具体的模型名或概念
+- 避免使用过于宽泛的查询词，聚焦用户问题的核心概念
+
+📋 返回内容：
+该工具将返回相关的文档片段及其来源和页码。
+在回答时必须引用来源（文档名+页码）。"""
 

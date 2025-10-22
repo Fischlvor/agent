@@ -27,7 +27,6 @@ export default function MessageItem({ message }: MessageItemProps) {
   const handleSaveEdit = async () => {
     const trimmedContent = editContent.trim();
     if (trimmedContent && trimmedContent !== message.content) {
-      // ✅ 编辑消息并重新生成回复（不会创建重复的用户消息）
       await editMessageAndRegenerate(message.message_id || message.id, trimmedContent);
     }
     setIsEditing(false);
@@ -40,12 +39,13 @@ export default function MessageItem({ message }: MessageItemProps) {
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content || '');
-    // TODO: 显示复制成功提示
   };
+
+  const isUser = message.role === 'user';
+  const isAssistant = message.role === 'assistant';
 
   // ✅ 渲染时间线事件（与 StreamingMessageItem 保持一致的卡片样式）
   const renderTimelineEvent = (event: TimelineEvent, index: number) => {
-
     if (event.type === 'thinking') {
       const isCompleted = event.status === 'success' || event.status === '已完成思考';
 
@@ -103,27 +103,138 @@ export default function MessageItem({ message }: MessageItemProps) {
               {event.tool_name}
             </code>
           </div>
-          <details className="text-xs">
-            <summary className="cursor-pointer text-gray-600 hover:text-gray-900">查看详情</summary>
-            <div className="mt-2 space-y-2">
-              {event.tool_args && (
-                <div>
-                  <div className="font-medium text-gray-600 mb-1">参数:</div>
-                  <pre className="p-2 bg-white rounded overflow-x-auto">
-                    {JSON.stringify(event.tool_args, null, 2)}
-                  </pre>
+
+          {/* ✅ 专门处理search_knowledge_base的结果显示 */}
+          {isSuccess && event.tool_name === 'search_knowledge_base' && event.result && (() => {
+            try {
+              // 解析result（可能是字符串或对象）
+              let resultData = event.result.result;
+              if (typeof resultData === 'string') {
+                resultData = JSON.parse(resultData);
+              }
+
+              const documents = resultData?.documents || [];
+              const totalFound = resultData?.total_found || documents.length;
+
+              if (totalFound === 0) return null;
+
+              // ✅ 按文档名聚合（合并同一文档的不同chunk）
+              const groupedDocs = new Map();
+              documents.forEach((doc: any) => {
+                const fileName = doc.source?.split('/').pop() || '未命名文档';
+                if (!groupedDocs.has(fileName)) {
+                  groupedDocs.set(fileName, {
+                    fileName,
+                    pages: new Set(),
+                    maxScore: doc.score || 0,
+                    chunks: []
+                  });
+                }
+                const group = groupedDocs.get(fileName);
+                if (doc.page) group.pages.add(doc.page);
+                group.maxScore = Math.max(group.maxScore, doc.score || 0);
+                group.chunks.push(doc);
+              });
+
+              const uniqueDocs = Array.from(groupedDocs.values());
+
+              return (
+                <div className="text-xs space-y-1.5 mt-2">
+                  <div className="font-medium text-green-900">
+                    📚 检索到 {uniqueDocs.length} 个文档，{totalFound} 个相关片段
+                  </div>
+                  <details className="bg-green-100 border border-green-200 rounded p-2">
+                    <summary className="cursor-pointer hover:text-green-700 font-medium">
+                      查看检索结果
+                    </summary>
+                    <div className="mt-2 pt-2 border-t border-green-300 space-y-2">
+                      {uniqueDocs.slice(0, 3).map((group: any, idx: number) => {
+                        const pagesArray = Array.from(group.pages).sort((a: any, b: any) => a - b);
+                        const pagesText = pagesArray.length > 0
+                          ? pagesArray.length <= 3
+                            ? `p.${pagesArray.join(', ')}`
+                            : `p.${pagesArray.slice(0, 2).join(', ')}...等${pagesArray.length}页`
+                          : '';
+
+                        const displayFileName = group.fileName.length > 100
+                          ? group.fileName.substring(0, Math.floor(group.fileName.length * 0.8)) + '...'
+                          : group.fileName;
+
+                        return (
+                          <details key={idx} className="bg-white border border-green-200 rounded p-1.5">
+                            <summary
+                              className="cursor-pointer hover:text-green-700 font-medium text-green-800"
+                              title={group.fileName}
+                            >
+                              📄 {displayFileName}
+                              {pagesText && ` (${pagesText})`}
+                              {' - '}
+                              <span className="text-green-600">{(group.maxScore * 100).toFixed(0)}%</span>
+                              {group.chunks.length > 1 && (
+                                <span className="ml-1 text-xs text-gray-500">({group.chunks.length}个片段)</span>
+                              )}
+                            </summary>
+                            <div className="mt-2 pt-2 border-t border-green-200 space-y-1.5 pl-4">
+                              {group.chunks.map((chunk: any, cidx: number) => {
+                                const contentLength = chunk.content?.length || 0;
+                                const summaryLength = Math.floor(contentLength * 0.8);
+                                const detailLength = Math.floor(contentLength * 0.8);
+
+                                return (
+                                  <details key={cidx} className="text-green-700 bg-green-50 rounded p-1.5 text-xs border-l-2 border-green-300">
+                                    <summary className="cursor-pointer font-medium hover:text-green-800">
+                                      {chunk.page && <span className="text-green-600">p.{chunk.page}: </span>}
+                                      <span className="line-clamp-2">{chunk.content?.substring(0, summaryLength)}...</span>
+                                    </summary>
+                                    <div className="mt-2 pt-2 border-t border-green-200 text-green-700 whitespace-pre-wrap">
+                                      {chunk.content?.substring(0, detailLength)}...
+                                    </div>
+                                  </details>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        );
+                      })}
+                      {uniqueDocs.length > 3 && (
+                        <div className="text-center text-green-600">
+                          ...还有 {uniqueDocs.length - 3} 个文档
+                        </div>
+                      )}
+                    </div>
+                  </details>
                 </div>
-              )}
-              {event.result && (
-                <div>
-                  <div className="font-medium text-gray-600 mb-1">结果:</div>
-                  <pre className="p-2 bg-white rounded overflow-x-auto max-h-40">
-                    {typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </details>
+              );
+            } catch (e) {
+              console.error('Failed to parse search result:', e);
+              return null;
+            }
+          })()}
+
+          {/* 其他工具的结果 */}
+          {!isSuccess || event.tool_name !== 'search_knowledge_base' ? (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-600 hover:text-gray-900">查看详情</summary>
+              <div className="mt-2 space-y-2">
+                {event.tool_args && (
+                  <div>
+                    <div className="font-medium text-gray-600 mb-1">参数:</div>
+                    <pre className="p-2 bg-white rounded overflow-x-auto">
+                      {JSON.stringify(event.tool_args, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {event.result && (
+                  <div>
+                    <div className="font-medium text-gray-600 mb-1">结果:</div>
+                    <pre className="p-2 bg-white rounded overflow-x-auto max-h-40">
+                      {typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </details>
+          ) : null}
         </div>
       );
     }
@@ -131,68 +242,30 @@ export default function MessageItem({ message }: MessageItemProps) {
     return null;
   };
 
-  const isUser = message.role === 'user';
-  const isAssistant = message.role === 'assistant';
-
   return (
-    <div
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
-    >
-      <div className={`max-w-3xl w-full flex ${isUser ? 'flex-row-reverse' : 'flex-row'} space-x-3`}>
-        {/* 头像 */}
-        <div className="flex-shrink-0">
-          <div
-            className={`w-8 h-8 rounded-full flex items-center justify-center ${
-              isUser
-                ? 'bg-primary-500 text-white'
-                : 'bg-gradient-to-br from-purple-500 to-pink-500 text-white'
-            }`}
-          >
-            {isUser ? (
-              <svg
-                className="w-5 h-5"
-                fill="currentColor"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            ) : (
-              <svg
-                className="w-5 h-5"
-                fill="currentColor"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"
-                />
-                <path
-                  d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"
-                />
-              </svg>
-            )}
-          </div>
+    <div className={`flex ${isUser ? 'flex-row-reverse space-x-reverse' : ''} space-x-3`}>
+      {/* 头像 */}
+      <div className="flex-shrink-0">
+        <div
+          className={`w-8 h-8 rounded-full flex items-center justify-center ${
+            isUser
+              ? 'bg-gradient-to-br from-primary-400 to-primary-600'
+              : 'bg-gradient-to-br from-gray-400 to-gray-600'
+          }`}
+        >
+          <span className="text-white text-sm font-medium">
+            {isUser ? 'U' : 'AI'}
+          </span>
         </div>
+      </div>
 
-        {/* 消息内容 */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center mb-1 space-x-2">
-            <span className="font-semibold text-sm text-gray-900">
-              {isUser ? '你' : 'AI 助手'}
-            </span>
-            {message.is_edited && (
-              <span className="text-xs text-gray-500">(已编辑)</span>
-            )}
-            {message.model_name && (
-              <span className="text-xs text-gray-500">• {message.model_name}</span>
-            )}
-          </div>
-
+      {/* 消息内容 */}
+      <div
+        className={`flex-1 ${isUser ? 'max-w-2xl ml-auto' : 'max-w-4xl'}`}
+        onMouseEnter={() => setShowActions(true)}
+        onMouseLeave={() => setShowActions(false)}
+      >
+        <div>
           {isEditing ? (
             <div className="space-y-2">
               <textarea
@@ -313,4 +386,3 @@ export default function MessageItem({ message }: MessageItemProps) {
     </div>
   );
 }
-

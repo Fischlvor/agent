@@ -108,8 +108,26 @@ export interface ChatMessage {
   user_feedback?: string;
   created_at: string;
   updated_at: string;
-  // 前端扩展字段
-  timeline?: TimelineEvent[];  // ✅ 事件时间线
+
+  // OpenAI标准字段（用于工具调用）
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string | Record<string, any>;
+    };
+  }>;
+  tool_call_id?: string;
+  name?: string;
+
+  // 消息分类字段（前端渲染依赖）
+  message_subtype?: 'thinking' | 'tool_call' | 'tool_result' | 'final_response';
+  is_internal?: boolean;
+  display_order?: number;
+
+  // 前端扩展字段（兼容旧格式）
+  timeline?: TimelineEvent[];  // ✅ 事件时间线（逐步废弃）
 }
 
 export interface UpdateMessageRequest {

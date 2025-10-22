@@ -89,14 +89,25 @@ export default function ChatSessionPage() {
     if (!pendingMessage) return;
     if (!currentSession) return;
     if (currentSession.session_id !== sessionId && currentSession.id !== sessionId) return;
-    if (status !== 'connected') return;
 
-    // 检查 selectSession 是否已经清空了 pendingMessage（说明已经处理了）
-    // 如果 pendingMessage 还在，说明 selectSession 没有处理，这里作为兜底
-    console.log('[ChatSessionPage] 兜底逻辑：检测到待发送消息', { kbId: pendingKbId });
+    // ✅ 兜底逻辑：使用 WebSocket 管理器等待连接
+    const waitAndSend = async () => {
+      console.log('[ChatSessionPage] 兜底逻辑：检测到待发送消息', { kbId: pendingKbId });
 
-    // 延迟一点确保页面渲染完成，并避免与 selectSession 的延迟冲突
-    const timer = setTimeout(() => {
+      const { wsManager } = useChatStore.getState();
+      if (!wsManager) {
+        console.warn('[ChatSessionPage] WebSocket 管理器未初始化');
+        return;
+      }
+
+      // 等待连接建立（最多 3 秒）
+      const connected = await wsManager.waitForConnection(3000);
+
+      if (!connected) {
+        console.warn('[ChatSessionPage] WebSocket 连接超时，取消发送');
+        return;
+      }
+
       // 再次检查，避免重复发送（selectSession 可能已经处理了）
       const { pendingMessage: stillPending } = useChatStore.getState();
       if (stillPending) {
@@ -104,11 +115,18 @@ export default function ChatSessionPage() {
         setPendingMessage(null); // 清空待发送消息
         setPendingKbId(null); // 清空待发送知识库ID
         sendMessage(pendingMessage, undefined, pendingKbId);
+      } else {
+        console.log('[ChatSessionPage] selectSession 已处理，跳过兜底发送');
       }
+    };
+
+    // 延迟一点确保页面渲染完成，并避免与 selectSession 的延迟冲突
+    const timer = setTimeout(() => {
+      waitAndSend();
     }, 500); // 延迟比 selectSession 长，让 selectSession 优先处理
 
     return () => clearTimeout(timer);
-  }, [pendingMessage, pendingKbId, currentSession, sessionId, status, sendMessage, setPendingMessage, setPendingKbId]);
+  }, [pendingMessage, pendingKbId, currentSession, sessionId, sendMessage, setPendingMessage, setPendingKbId]);
 
   // ✅ 检测会话是否加载失败（error 状态且没有 currentSession）
   useEffect(() => {

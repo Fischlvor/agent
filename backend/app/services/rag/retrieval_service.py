@@ -96,7 +96,15 @@ class RetrievalService:
             logger.warning(f"❌ 未找到相关内容 (kb_id={kb_id}, threshold={similarity_threshold})")
             return [], int((time.time() - start_time) * 1000)
 
-        logger.info(f"召回 {len(child_results)} 个子块")
+        if child_results:
+            avg_similarity = sum(float(row[7]) for row in child_results) / len(child_results)
+            logger.info(
+                f"召回 {len(child_results)} 个子块, "
+                f"平均相似度 {avg_similarity:.4f}, "
+                f"最高相似度 {max(float(row[7]) for row in child_results):.4f}"
+            )
+        else:
+            logger.info("召回 0 个子块")
 
         # 构造子块数据
         child_ids = [row[0] for row in child_results]
@@ -107,7 +115,16 @@ class RetrievalService:
             chunk_texts = [row[2] for row in child_results]  # content
             rerank_scores = await self.reranker.rerank(query, chunk_texts)
 
-            logger.info(f"重排序完成")
+            # 计算重排前后的分数变化
+            original_scores = [child_scores[cid] for cid in child_ids]
+            avg_original = sum(original_scores) / len(original_scores) if original_scores else 0
+            avg_rerank = sum(rerank_scores) / len(rerank_scores) if rerank_scores else 0
+
+            logger.info(
+                f"重排序完成: 处理 {len(chunk_texts)} 个子块, "
+                f"平均分数 {avg_original:.4f} → {avg_rerank:.4f}, "
+                f"最高分 {max(rerank_scores):.4f}"
+            )
 
             # 更新分数
             for cid, rerank_score in zip(child_ids, rerank_scores):
@@ -142,7 +159,14 @@ class RetrievalService:
                 score
             )
 
-        logger.info(f"聚合到 {len(parent_groups)} 个父块")
+        if parent_groups:
+            avg_parent_score = sum(pg['max_score'] for pg in parent_groups.values()) / len(parent_groups)
+            logger.info(
+                f"聚合到 {len(parent_groups)} 个父块, "
+                f"平均父块分数 {avg_parent_score:.4f}"
+            )
+        else:
+            logger.info("聚合到 0 个父块")
 
         # ===== 阶段 4：按最高分数排序 + 取 Top-K =====
         sorted_parents = sorted(

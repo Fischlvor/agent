@@ -279,13 +279,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
 
       // ✅ 检查是否有待发送的消息，如果有则自动发送
-      const { pendingMessage, pendingKbId } = get();
+      const { pendingMessage, pendingKbId, wsManager } = get();
       if (pendingMessage) {
         console.log('[selectSession] 检测到待发送消息，准备自动发送', { kbId: pendingKbId });
         set({ pendingMessage: null, pendingKbId: null }); // 清空待发送消息和知识库ID
+
+        // ✅ 使用 WebSocket 管理器等待连接
+        const waitAndSend = async () => {
+          if (!wsManager) {
+            console.warn('[selectSession] WebSocket 管理器未初始化，恢复 pendingMessage');
+            set({ pendingMessage, pendingKbId });
+            return;
+          }
+
+          // 等待连接建立（最多 1.5 秒）
+          const connected = await wsManager.waitForConnection(1500);
+
+          if (connected) {
+            console.log('[selectSession] WebSocket 已连接，发送消息');
+            get().sendMessage(pendingMessage, undefined, pendingKbId);
+          } else {
+            console.warn('[selectSession] WebSocket 连接超时，恢复 pendingMessage 让兜底逻辑处理');
+            set({ pendingMessage, pendingKbId });
+          }
+        };
+
         // 延迟一下确保 WebSocket 连接就绪
         setTimeout(() => {
-          get().sendMessage(pendingMessage, undefined, pendingKbId);
+          waitAndSend();
         }, 300);
       }
     } catch (error: any) {

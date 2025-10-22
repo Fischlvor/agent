@@ -4,6 +4,7 @@ import logging
 import os
 from typing import List
 import torch
+import numpy as np
 from FlagEmbedding import FlagReranker
 
 logger = logging.getLogger(__name__)
@@ -60,12 +61,18 @@ class RerankerService:
         # 构造输入对
         pairs = [[query, text] for text in texts]
 
-        # 计算分数（FlagReranker不支持normalize参数）
+        # 计算分数（返回原始logit分数，范围约-10到+10）
         scores = self.reranker.compute_score(pairs)
 
         # 确保返回列表
         if isinstance(scores, float):
             scores = [scores]
+
+        # ✅ 如果需要归一化，使用sigmoid函数转换到[0,1]区间
+        if normalize:
+            # Sigmoid: 1 / (1 + exp(-x))
+            scores = [1.0 / (1.0 + np.exp(-score)) for score in scores]
+            logger.debug(f"重排序分数已归一化到[0,1]区间")
 
         return scores
 

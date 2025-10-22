@@ -18,6 +18,7 @@ class ChatMessage(BaseModel):
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="消息主键ID")
     message_id = Column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, comment="消息业务ID(UUID)")
+    round_id = Column(UUID(as_uuid=True), nullable=True, comment="对话轮次ID：同一轮对话的所有子消息共享此ID")
     session_id = Column(UUID(as_uuid=True),
                         ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
                         nullable=False,
@@ -46,6 +47,16 @@ class ChatMessage(BaseModel):
     user_feedback = Column(Text, nullable=True, comment="用户反馈")
     message_metadata = Column(JSONB, nullable=True, comment="元数据，JSONB格式")
     error_info = Column(JSONB, nullable=True, comment="错误信息，JSONB格式")
+
+    # OpenAI标准字段（用于工具调用）
+    tool_calls = Column(JSONB, nullable=True, comment="OpenAI格式的工具调用列表（Assistant调用工具时使用）")
+    tool_call_id = Column(String(255), nullable=True, comment="关联的工具调用ID（Tool消息时使用）")
+    name = Column(String(100), nullable=True, comment="工具名称（Tool消息时使用）")
+
+    # 消息分类字段
+    message_subtype = Column(String(50), nullable=True, comment="消息子类型：thinking, tool_call, tool_result, final_response")
+    is_internal = Column(Boolean, default=False, comment="是否为内部消息（thinking=true，不传给LLM）")
+    display_order = Column(Integer, default=0, comment="同一轮对话中的显示顺序")
 
     # 关系
     session = relationship("ChatSession", back_populates="messages")

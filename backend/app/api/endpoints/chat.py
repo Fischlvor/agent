@@ -322,14 +322,14 @@ async def _generate_and_push_response(
         db.close()
 
 
-@router.get("/sessions/{session_id}/messages", response_model=MessageListResponse)
+@router.get("/sessions/{session_id}/messages")
 def get_messages(
     session_id: str,
     limit: int = Query(50, ge=1, le=200, description="消息数量限制"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """获取会话的消息历史
+    """获取会话的消息历史（带timeline聚合）
 
     Args:
         session_id: 会话ID
@@ -338,14 +338,55 @@ def get_messages(
         current_user: 当前用户
 
     Returns:
-        消息列表
+        消息列表（包含聚合的timeline）
     """
     chat_service = ChatService(db)
     messages = chat_service.get_messages(session_id, current_user, limit=limit)
-    return MessageListResponse(
-        messages=messages,
-        total=len(messages)
-    )
+
+    # 手动序列化，包含timeline字段
+    message_dicts = []
+    for msg in messages:
+        msg_dict = {
+            "id": msg.id,
+            "message_id": str(msg.message_id) if msg.message_id else None,
+            "session_id": str(msg.session_id),
+            "parent_message_id": str(msg.parent_message_id) if msg.parent_message_id else None,
+            "role": msg.role,
+            "content": msg.content,
+            "message_type": msg.message_type,
+            "status": msg.status,
+            "is_edited": msg.is_edited,
+            "is_deleted": msg.is_deleted,
+            "is_pinned": msg.is_pinned,
+            "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
+            "model_name": msg.model_name,
+            "prompt_tokens": msg.prompt_tokens,
+            "completion_tokens": msg.completion_tokens,
+            "total_tokens": msg.total_tokens,
+            "generation_time": msg.generation_time,
+            "structured_content": msg.structured_content,
+            "user_rating": msg.user_rating,
+            "user_feedback": msg.user_feedback,
+            "created_at": msg.created_at.isoformat(),
+            "updated_at": msg.updated_at.isoformat(),
+            "tool_calls": msg.tool_calls,
+            "tool_call_id": msg.tool_call_id,
+            "name": msg.name,
+            "message_subtype": msg.message_subtype,
+            "is_internal": msg.is_internal,
+            "display_order": msg.display_order,
+        }
+
+        # ✅ 添加timeline字段（如果存在）
+        if hasattr(msg, 'timeline'):
+            msg_dict["timeline"] = msg.timeline
+
+        message_dicts.append(msg_dict)
+
+    return {
+        "messages": message_dicts,
+        "total": len(message_dicts)
+    }
 
 
 @router.patch("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -28,7 +28,7 @@ class QwenClient(BaseAIClient):
         self,
         base_url: str = "http://localhost:11434",
         model: str = "qwen3:8b",  # Default model set to qwen3:8b
-        timeout: float = 60.0,
+        timeout: float = 300.0,  # 增加到5分钟，支持复杂的知识库问答任务
         max_retries: int = 3,
     ):
         """
