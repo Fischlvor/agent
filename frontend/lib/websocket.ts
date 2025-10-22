@@ -193,6 +193,7 @@ export class ChatWebSocketManager {
   private token: string;
   private eventHandlers: Map<string, Set<Function>> = new Map();
   private unsubscribers: (() => void)[] = [];
+  private messageQueue: any[] = []; // ✅ 消息队列，用于连接建立前的消息
 
   constructor(baseUrl: string, token: string) {
     this.baseUrl = baseUrl;
@@ -201,6 +202,26 @@ export class ChatWebSocketManager {
 
   get isConnected(): boolean {
     return wsManager['ws']?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * ✅ 等待 WebSocket 连接建立
+   * @param timeout 超时时间（毫秒）
+   * @returns 是否成功连接
+   */
+  async waitForConnection(timeout: number = 3000): Promise<boolean> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      if (this.isConnected) {
+        return true;
+      }
+      // 每 100ms 检查一次
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    console.warn('[ChatWebSocketManager] 等待连接超时');
+    return false;
   }
 
   on(event: string, handler: Function): void {
@@ -282,7 +303,36 @@ export class ChatWebSocketManager {
     wsManager.send(message);
   }
 
+  /**
+   * ✅ 发送消息（带自动等待连接）
+   * @param message 要发送的消息
+   * @param timeout 等待连接的超时时间（毫秒）
+   * @returns 是否成功发送
+   */
+  async sendWithWait(message: any, timeout: number = 2000): Promise<boolean> {
+    // 如果已连接，直接发送
+    if (this.isConnected) {
+      wsManager.send(message);
+      return true;
+    }
+
+    // 等待连接
+    console.log('[ChatWebSocketManager] WebSocket 未连接，等待连接...');
+    const connected = await this.waitForConnection(timeout);
+
+    if (connected) {
+      wsManager.send(message);
+      return true;
+    } else {
+      console.error('[ChatWebSocketManager] 等待连接超时，无法发送消息');
+      return false;
+    }
+  }
+
   disconnect(): void {
+    // 清空消息队列
+    this.messageQueue = [];
+
     // 取消所有订阅
     this.unsubscribers.forEach(unsub => unsub());
     this.unsubscribers = [];

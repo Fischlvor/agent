@@ -39,7 +39,8 @@ class ADKAgentAdapter:
         self,
         client: BaseAIClient,
         max_iterations: int = 50,
-        debug: bool = False
+        debug: bool = False,
+        max_context_length: Optional[int] = None
     ):
         """
         初始化 Agent 适配器
@@ -48,14 +49,20 @@ class ADKAgentAdapter:
             client: 我们的 LLM 客户端
             max_iterations: 最大迭代次数
             debug: 是否启用调试模式
+            max_context_length: 最大上下文长度（从模型表读取）
         """
         self.our_client = client
         self.max_iterations = max_iterations
         self.debug = debug
+        self.max_context_length = max_context_length
 
         # 创建 ADK LLM 适配器（使用客户端的实际模型名称）
         model_name = getattr(client, 'model', 'unknown')  # 从客户端获取模型名称
-        self.adk_llm = ADKLlmAdapter(our_client=client, model_name=model_name)
+        self.adk_llm = ADKLlmAdapter(
+            our_client=client,
+            model_name=model_name,
+            max_context_length=max_context_length
+        )
         # ✅ 保存自己的引用，方便 LLM adapter 访问历史消息
         self.adk_llm.agent_adapter = self
 
@@ -93,8 +100,11 @@ class ADKAgentAdapter:
             - {"type": "tool_call", "name": "...", "args": {...}}
             - {"type": "tool_result", "name": "...", "result": "..."}
         """
-        # 如果提供了 system_prompt，且第一条消息不是 system，则插入到开头
-        if system_prompt and (not messages or messages[0].get("role") != "system"):
+        # ✅ 强制使用最新的系统提示词（每次都更新）
+        if system_prompt:
+            # 移除旧的system消息（如果有）
+            messages = [msg for msg in messages if msg.get("role") != "system"]
+            # 在开头插入新的system消息
             messages = [{"role": "system", "content": system_prompt}] + messages
 
         # ============ 步骤 1：获取或创建 ADK Agent 和 Runner（带全局缓存）============

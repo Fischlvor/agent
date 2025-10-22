@@ -28,7 +28,7 @@ class AIClientFactory:
     def create_client(
             self,
             provider: str,
-            model_name: str,
+            model_id: str,
             base_url: Optional[str] = None,
             **kwargs,
     ) -> BaseAIClient:
@@ -37,7 +37,7 @@ class AIClientFactory:
 
         Args:
             provider: 模型提供商，如 "ollama", "openai" 等
-            model_name: 模型名称，如 "qwen3:8b"
+            model_id: 模型ID（API调用标识符），如 "qwen3:8b"
             base_url: API基础URL（可选）
             **kwargs: 传递给客户端构造函数的额外参数
 
@@ -57,7 +57,7 @@ class AIClientFactory:
                 f"不支持的模型提供商 '{provider}'，支持的有: {supported_providers}")
 
         # 构造客户端缓存键
-        cache_key = f"{provider}:{model_name}"
+        cache_key = f"{provider}:{model_id}"
         if base_url:
             cache_key += f":{base_url}"
         for key, value in sorted(kwargs.items()):
@@ -71,7 +71,7 @@ class AIClientFactory:
 
         # 创建新客户端实例
         client_class = self.client_classes[provider]
-        client_kwargs = {"model": model_name}
+        client_kwargs = {"model": model_id}
 
         # 添加base_url
         if base_url:
@@ -85,7 +85,7 @@ class AIClientFactory:
 
         # 缓存客户端实例
         self._clients[cache_key] = client
-        LOGGER.info("创建AI客户端: %s (provider=%s, model=%s)", cache_key, provider, model_name)
+        LOGGER.info("创建AI客户端: %s (provider=%s, model_id=%s)", cache_key, provider, model_id)
 
         return client
 

@@ -95,11 +95,11 @@ export default function ContextProgress({ currentTokens, maxTokens }: ContextPro
               ? 'text-amber-600'
               : 'text-gray-700'
           }`}>
-            {(animatedTokens / 1000).toFixed(1)}K
+            {(animatedTokens / 1024).toFixed(1)}K
           </span>
           <span className="text-gray-400">/</span>
           <span className="text-gray-600">
-            {(maxTokens / 1000).toFixed(0)}K
+            {(maxTokens / 1024).toFixed(0)}K
           </span>
         </div>
         <div className="text-xs text-gray-400">

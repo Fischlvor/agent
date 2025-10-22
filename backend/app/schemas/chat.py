@@ -134,6 +134,16 @@ class MessageResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # OpenAI标准字段（用于工具调用）
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
+    # 消息分类字段（前端渲染依赖）
+    message_subtype: Optional[str] = None  # thinking, tool_call, tool_result, final_response
+    is_internal: bool = False  # thinking消息为true
+    display_order: int = 0  # 同一轮对话中的顺序
+
 
 class MessageListResponse(BaseModel):
     """消息列表响应Schema"""
